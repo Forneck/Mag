@@ -54,7 +54,7 @@ except Exception as e:
     print(error_msg); log_message(error_msg, "Sistema"); exit()
 
 # Modelos
-GEMINI_TEXT_MODEL_NAME = "gemini-2.0-flash" # Ou gemini-2.0-flash conforme log anterior
+GEMINI_TEXT_MODEL_NAME = "gemini-2.0-flash"
 GEMINI_IMAGE_GENERATION_MODEL_NAME = "gemini-2.0-flash-preview-image-generation"
 
 log_message(f"Modelo Gemini (texto/lógica): {GEMINI_TEXT_MODEL_NAME}", "Sistema")
@@ -72,9 +72,7 @@ generation_config_image = {
     "temperature": 1.0,
     "top_p": 0.95,
     "top_k": 64,
-    "response_modalities": ['TEXT', 'IMAGE'], # Chave baseada na documentação
-    # response_mime_type não é necessário aqui se response_modalities for especificado
-    # e o erro anterior indicava que image/* não era permitido para o mime_type geral.
+    "response_modalities": ['TEXT', 'IMAGE'],
 }
 
 safety_settings_gemini = [
@@ -105,7 +103,7 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GE
 
     for part_item in prompt_parts:
         if isinstance(part_item, str): text_prompt_for_log += part_item + "\n"
-        elif hasattr(part_item, 'name') and hasattr(part_item, 'display_name'): # Gemini File object
+        elif hasattr(part_item, 'name') and hasattr(part_item, 'display_name'):
             file_references_for_log.append(f"Arquivo: {part_item.display_name} (ID: {part_item.name}, TipoMIME: {getattr(part_item, 'mime_type', 'N/A')})")
     log_message(f"Prompt textual para {agent_name} (Modelo: {model_name}):\n---\n{text_prompt_for_log}\n---", "Sistema")
     if file_references_for_log: log_message(f"Arquivos referenciados para {agent_name}:\n" + "\n".join(file_references_for_log), "Sistema")
@@ -124,17 +122,15 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GE
             response = model_instance.generate_content(prompt_parts)
             log_message(f"Resposta bruta da API Gemini (tentativa {attempt + 1}, Modelo: {model_name}): {response}", agent_name)
             
-            if agent_name == "ImageWorker": # ImageWorker precisa do objeto response completo
+            if agent_name == "ImageWorker":
                 log_message(f"Retornando objeto 'response' completo para ImageWorker (tentativa {attempt+1}, Modelo: {model_name}).", "Sistema")
                 return response
 
-            # Para chamadas de texto
             if hasattr(response, 'text') and response.text is not None:
                  api_result_text = response.text.strip()
                  log_message(f"Sucesso! Resposta de texto da API Gemini (response.text) para {agent_name} (tentativa {attempt + 1}).", "Sistema")
                  return api_result_text
             
-            # Fallback para texto se response.text não estiver disponível, mas candidates[0].content.parts[0].text sim
             if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 first_part = response.candidates[0].content.parts[0]
                 if hasattr(first_part, 'text') and first_part.text is not None:
@@ -152,7 +148,6 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GE
                 time.sleep(current_retry_delay); current_retry_delay *= RETRY_BACKOFF_FACTOR; continue
             log_message(f"Falha após {MAX_API_RETRIES} tentativas (sem resposta utilizável para {agent_name}, Modelo: {model_name}).", agent_name)
             return None
-
         except Exception as e:
             log_message(f"Exceção na tentativa {attempt + 1}/{MAX_API_RETRIES} ({agent_name}, Modelo: {model_name}): {type(e).__name__} - {e}", agent_name)
             log_message(f"Traceback: {traceback.format_exc()}", agent_name)
@@ -237,35 +232,31 @@ class ImageWorker:
         image_base64_str = None
         returned_text_content = ""
 
-        # Acessa as partes através de response.candidates[0].content.parts
         if response_object.candidates and response_object.candidates[0].content and response_object.candidates[0].content.parts:
             parts = response_object.candidates[0].content.parts
             log_message(f"ImageWorker: Processando {len(parts)} partes da resposta.", agent_display_name)
 
             for i, part in enumerate(parts):
-                log_message(f"ImageWorker: Analisando parte {i}: {str(part)[:200]}...", agent_display_name) # Log resumido da parte
+                log_message(f"ImageWorker: Analisando parte {i}: {str(part)[:200]}...", agent_display_name)
                 if part.text is not None and part.text.strip():
                     current_part_text = part.text.strip()
                     returned_text_content += (current_part_text + "\n") if current_part_text else ""
                     log_message(f"ImageWorker: Texto encontrado na parte {i}: '{current_part_text[:100]}...'", agent_display_name)
                 elif part.inline_data and part.inline_data.data:
                     mime_type = part.inline_data.mime_type
-                    image_bytes = part.inline_data.data # Isso é um objeto bytes
+                    image_bytes = part.inline_data.data
                     
                     if mime_type.startswith("image/"):
-                        # CORREÇÃO: Converte bytes para string base64
                         image_base64_str = base64.b64encode(image_bytes).decode('utf-8')
                         log_message(f"Sucesso! Imagem (Tipo: {mime_type}) convertida para string base64, recebida de {self.model_name} na parte {i}.", agent_display_name)
-                        # Se encontramos uma imagem, podemos parar de procurar por mais imagens,
-                        # mas continuamos o loop para coletar todo o texto.
                     else:
                         log_message(f"Alerta: Mime type retornado ({mime_type}) na parte {i} não é de imagem, mas inline_data foi encontrado.", agent_display_name)
             
             returned_text_content = returned_text_content.strip()
 
             if image_base64_str:
-                return image_base64_str # Sucesso, retorna a string base64
-            else: # Nenhuma imagem encontrada
+                return image_base64_str
+            else:
                 log_message(f"API Gemini (Modelo: {self.model_name}) retornou 'parts', mas nenhuma continha 'inline_data' de imagem.", agent_display_name)
                 if response_object.prompt_feedback and response_object.prompt_feedback.block_reason:
                      log_message(f"Geração de imagem bloqueada: {response_object.prompt_feedback.block_reason_message}", agent_display_name)
@@ -328,8 +319,17 @@ Sub-tarefas:
                 json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', response_text, re.DOTALL)
                 if json_match:
                     json_str = json_match.group(1) or json_match.group(2)
-                    self.task_list = json.loads(json_str)
-                    log_message(f"Tarefas decompostas: {self.task_list}", agent_display_name)
+                    # Garante que a lista de tarefas seja de strings
+                    parsed_tasks = json.loads(json_str)
+                    if isinstance(parsed_tasks, list) and all(isinstance(task, str) for task in parsed_tasks):
+                        self.task_list = parsed_tasks
+                    elif isinstance(parsed_tasks, list) and all(isinstance(task, dict) and "tarefa" in task for task in parsed_tasks):
+                         self.task_list = [task_item["tarefa"] for task_item in parsed_tasks]
+                         log_message("Decomposição retornou lista de dicionários, extraindo strings de 'tarefa'.", agent_display_name)
+                    else:
+                        raise ValueError("Formato de tarefa decomposta inesperado.")
+
+                    log_message(f"Tarefas decompostas (strings): {self.task_list}", agent_display_name)
                     print_agent_message(agent_display_name, f"Tarefas decompostas: {self.task_list}")
                     return True
                 else:
@@ -355,25 +355,41 @@ Sub-tarefas:
             model_name=self.gemini_text_model_name,
             gen_config=generation_config_text
         )
-        approved = []
+        approved_tasks_final = []
         if response:
             try:
                 json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', response, re.DOTALL)
+                parsed_response = []
                 if json_match:
                     json_str = json_match.group(1) or json_match.group(2)
-                    approved = json.loads(json_str)
-                    if not isinstance(approved, list): approved = []
-                else:
+                    parsed_response = json.loads(json_str)
+                else: # Fallback se não encontrar JSON delimitado
                     s, e = response.find('['), response.rfind(']')+1
-                    if s!=-1 and e > s: approved = json.loads(response[s:e])
-                    if not isinstance(approved, list): approved = []
-                print_agent_message(agent_name, f"Novas tarefas aprovadas: {approved}")
-            except Exception as ex: log_message(f"Erro ao decodificar aprovação: {ex}. Resp: {response}", agent_name)
-        else: log_message("Falha API na validação de novas tarefas.", agent_name)
-        return approved
+                    if s!=-1 and e > s: parsed_response = json.loads(response[s:e])
+
+                if isinstance(parsed_response, list):
+                    for item in parsed_response:
+                        if isinstance(item, str):
+                            approved_tasks_final.append(item)
+                        elif isinstance(item, dict) and "tarefa" in item and isinstance(item["tarefa"], str):
+                            approved_tasks_final.append(item["tarefa"])
+                        else:
+                            log_message(f"Item de tarefa aprovada ignorado (formato inesperado): {item}", agent_name)
+                else:
+                     log_message(f"Resposta de aprovação não é uma lista: {parsed_response}", agent_name)
+
+                print_agent_message(agent_name, f"Novas tarefas aprovadas (strings): {approved_tasks_final}")
+            except Exception as ex:
+                log_message(f"Erro ao decodificar/processar aprovação: {ex}. Resp: {response}", agent_name)
+                log_message(f"Traceback: {traceback.format_exc()}", agent_name)
+        else:
+            log_message("Falha API na validação de novas tarefas.", agent_name)
+        return approved_tasks_final
+
 
     def evaluate_and_select_image_concept(self, original_goal, image_task_results, uploaded_file_objects, files_metadata_for_prompt_text):
         agent_display_name = "Task Manager (Avaliação de Conceitos de Imagem)"
+        # ... (código restante idêntico à v8.0)
         print_agent_message(agent_display_name, "Avaliando conceitos de imagem gerados/tentados...")
 
         summary_of_image_attempts = "Resumo das tentativas de geração de imagem:\n"
@@ -382,7 +398,6 @@ Sub-tarefas:
         for i, res in enumerate(image_task_results):
             summary_of_image_attempts += f"Tentativa {i+1}:\n"
             summary_of_image_attempts += f"  - Prompt Usado: {res.get('image_prompt_used', 'N/A')}\n"
-            # Agora res.get("result") deve ser uma string base64 ou uma mensagem de falha (string)
             is_base64_success = isinstance(res.get("result"), str) and len(res.get("result", "")) > 100 and not str(res.get("result", "")).startswith("Falha")
             summary_of_image_attempts += f"  - Geração Bem-Sucedida: {'Sim' if is_base64_success else 'Não'}\n"
             if not is_base64_success:
@@ -458,17 +473,26 @@ Prompt Selecionado:
 
         current_task_index = 0
         while current_task_index < len(self.task_list):
-            current_task_description = self.task_list[current_task_index]
+            current_task_description = self.task_list[current_task_index] 
+            # Garante que current_task_description seja uma string
+            if isinstance(current_task_description, dict) and "tarefa" in current_task_description:
+                current_task_description = current_task_description["tarefa"]
+            elif not isinstance(current_task_description, str):
+                log_message(f"Item de tarefa inválido encontrado: {current_task_description}. Pulando.", agent_display_name)
+                current_task_index += 1
+                continue
+
+
             print_agent_message(agent_display_name, f"Próxima tarefa ({current_task_index + 1}/{len(self.task_list)}): {current_task_description}")
 
             task_result_for_completed_list = None
-            suggested_new_tasks = []
+            suggested_new_tasks_raw = [] # Para armazenar as sugestões brutas (podem ser dicts)
             
             if current_task_description.startswith("TASK_GERAR_IMAGEM:"):
                 image_prompt_description = "N/A - Descrição não encontrada"
                 if self.completed_tasks_results and self.completed_tasks_results[-1]["result"]:
                     prev_result = self.completed_tasks_results[-1]["result"]
-                    if isinstance(prev_result, str): # A descrição deve ser uma string
+                    if isinstance(prev_result, str):
                         image_prompt_description = prev_result.strip()
                     else:
                         log_message(f"Resultado da tarefa anterior ({self.completed_tasks_results[-1]['task']}) não é string: {type(prev_result)}", agent_display_name)
@@ -478,7 +502,7 @@ Prompt Selecionado:
                     log_message(task_result_for_completed_list, agent_display_name)
                 else:
                     print_agent_message(agent_display_name, f"Delegando para ImageWorker com prompt: '{image_prompt_description[:70]}...'")
-                    task_result_for_completed_list = self.image_worker.generate_image(image_prompt_description) # Deve retornar string base64 ou string de erro
+                    task_result_for_completed_list = self.image_worker.generate_image(image_prompt_description)
                 
                 image_generation_attempts.append({
                     "image_prompt_used": image_prompt_description,
@@ -502,7 +526,7 @@ Prompt Selecionado:
                 context_summary = "Resultados anteriores:\n" + ("Nenhum.\n" if not self.completed_tasks_results else "".join([f"- '{r['task']}': {str(r.get('result','N/A'))[:200]}...\n" for r in self.completed_tasks_results]))
                 context_summary += f"\nArquivos: {files_metadata_for_prompt_text}\nObjetivo: {initial_goal}\n"
                 log_message(f"Enviando '{current_task_description}' para Worker.", agent_display_name)
-                task_result_text, suggested_new_tasks = self.worker.execute_sub_task(current_task_description, context_summary, uploaded_file_objects)
+                task_result_text, suggested_new_tasks_raw = self.worker.execute_sub_task(current_task_description, context_summary, uploaded_file_objects)
                 
                 task_result_for_completed_list = task_result_text
                 if task_result_text is None:
@@ -513,15 +537,17 @@ Prompt Selecionado:
                 log_message(f"Resultado da tarefa '{current_task_description}': {str(task_result_for_completed_list)[:200]}...", agent_display_name)
                 log_message(f"Tarefa '{current_task_description}' concluída.", agent_display_name)
 
-            if suggested_new_tasks:
-                print_agent_message(agent_display_name, f"Worker sugeriu: {suggested_new_tasks}")
-                approved_tasks = self.confirm_new_tasks_with_llm(initial_goal, self.task_list, suggested_new_tasks, uploaded_file_objects, files_metadata_for_prompt_text)
-                if approved_tasks:
-                    for nt_idx, nt in enumerate(approved_tasks):
-                        if nt not in self.task_list:
-                            self.task_list.insert(current_task_index + 1 + nt_idx, nt)
-                            log_message(f"Nova tarefa APROVADA '{nt}' inserida na lista.", agent_display_name)
-                    print_agent_message(agent_display_name, f"Lista de tarefas atualizada: {self.task_list}")
+            if suggested_new_tasks_raw: # Agora suggested_new_tasks_raw é uma lista de strings do Worker
+                print_agent_message(agent_display_name, f"Worker sugeriu: {suggested_new_tasks_raw}")
+                # confirm_new_tasks_with_llm já retorna uma lista de strings
+                approved_tasks_strings = self.confirm_new_tasks_with_llm(initial_goal, self.task_list, suggested_new_tasks_raw, uploaded_file_objects, files_metadata_for_prompt_text)
+                if approved_tasks_strings:
+                    for nt_idx, nt_string in enumerate(approved_tasks_strings):
+                        if nt_string not in self.task_list: # Evita duplicatas se a tarefa já existir como string
+                            # Insere novas tarefas após a atual, para serem processadas em seguida
+                            self.task_list.insert(current_task_index + 1 + nt_idx, nt_string)
+                            log_message(f"Nova tarefa APROVADA '{nt_string}' inserida na lista.", agent_display_name)
+                    print_agent_message(agent_display_name, f"Lista de tarefas atualizada: {[str(t)[:100]+'...' for t in self.task_list]}") # Log resumido
                 else: print_agent_message(agent_display_name, "Nenhuma nova tarefa sugerida aprovada.")
             
             current_task_index += 1; time.sleep(1) 
@@ -530,6 +556,7 @@ Prompt Selecionado:
         self.validate_and_save_final_output(initial_goal, uploaded_file_objects, files_metadata_for_prompt_text)
 
     def extract_structured_output(self, llm_response_text):
+        # ... (código restante idêntico à v8.0)
         output_type, main_content, evaluation_text = "TEXTO_GERAL", llm_response_text, llm_response_text
         if not llm_response_text:
             log_message("extract_structured_output recebeu resposta vazia do LLM.", "TM(Val)")
@@ -558,6 +585,7 @@ Prompt Selecionado:
 
 
     def validate_and_save_final_output(self, original_goal, uploaded_file_objects, files_metadata_for_prompt_text):
+        # ... (código restante idêntico à v8.0)
         agent_display_name = "Task Manager (Validação)"
         print_agent_message(agent_display_name, "Validando resultado final...")
         if not self.completed_tasks_results:
@@ -571,22 +599,22 @@ Prompt Selecionado:
 
         if evaluation_task_result_obj:
             selected_image_prompt = evaluation_task_result_obj.get("image_prompt_selected", "N/A")
-            selected_image_generation_result = evaluation_task_result_obj.get("result") # Deve ser string base64 ou string de erro
+            selected_image_generation_result = evaluation_task_result_obj.get("result")
             generation_status_text = "Falha na geração ou prompt não levou a uma imagem."
             
             if isinstance(selected_image_generation_result, str) and \
                len(selected_image_generation_result) > 100 and \
                not selected_image_generation_result.startswith("Falha") and \
-               re.match(r'^[A-Za-z0-9+/]+={0,2}$', selected_image_generation_result.strip()): # Verifica se é uma string base64
+               re.match(r'^[A-Za-z0-9+/]+={0,2}$', selected_image_generation_result.strip()):
                 generation_status_text = "Sucesso (imagem base64 abaixo, se este for o produto final)."
                 final_image_base64_for_saving = selected_image_generation_result.strip()
-            elif selected_image_generation_result: # Se for uma mensagem de erro (string)
+            elif selected_image_generation_result:
                 generation_status_text = str(selected_image_generation_result)
             results_summary_text += f"- Tarefa: {evaluation_task_result_obj['task']}\n  Conceito Selecionado (Prompt): {selected_image_prompt}\n  Status da Geração do Conceito Selecionado: {generation_status_text}\n\n"
-        else: # Se não houve tarefa de avaliação, procura pela última imagem gerada com sucesso
+        else:
             for res in reversed(self.completed_tasks_results):
                 if res["task"].startswith("TASK_GERAR_IMAGEM:"):
-                    img_res = res.get("result") # Deve ser string base64 ou string de erro
+                    img_res = res.get("result")
                     if isinstance(img_res, str) and len(img_res) > 100 and not img_res.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', img_res.strip()):
                         final_image_base64_for_saving = img_res.strip()
                         results_summary_text += f"- Tarefa: {res['task']} (Última imagem gerada com sucesso selecionada como candidata)\n  Resultado: Sucesso (imagem base64 abaixo, se este for o produto final)\n\n"
@@ -599,7 +627,7 @@ Prompt Selecionado:
                     is_candidate_final_image = (isinstance(result_display, str) and result_display == final_image_base64_for_saving)
                     if isinstance(result_display, str) and len(result_display) > 100 and not result_display.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', result_display.strip()):
                         result_display = f"[IMAGEM GERADA - {'Candidata a produto final' if is_candidate_final_image else 'Outra variação/Não selecionada'}]"
-                    else: # É uma string de erro ou não é base64
+                    else:
                         result_display = f"[TENTATIVA DE GERAR IMAGEM - Falhou: {result_display}]"
                 results_summary_text += f"- Tarefa: {item['task']}\n  Resultado: {str(result_display)[:300]}...\n\n"
 
@@ -635,7 +663,7 @@ Siga estritamente.
             
             actual_main_content_to_save = main_content_from_llm
             if output_type == "IMAGEM_PNG_BASE64":
-                if final_image_base64_for_saving: # Esta é a string base64
+                if final_image_base64_for_saving:
                     actual_main_content_to_save = final_image_base64_for_saving
                     log_message("Usando base64 da imagem gerada/selecionada para CONTEUDO_PRINCIPAL.", agent_display_name)
                 else:
@@ -655,7 +683,6 @@ Siga estritamente.
                     f.write(f"Meta: {original_goal}\nArquivos: {files_metadata_for_prompt_text}\n--- RESULTADOS SUB-TAREFAS ---\n")
                     for item in self.completed_tasks_results:
                         res_disp = item.get('result', 'N/A')
-                        # Verifica se é uma string base64 válida
                         is_base64_like = isinstance(res_disp,str) and len(res_disp)>100 and not res_disp.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', res_disp.strip())
                         
                         if item['task'].startswith("TASK_GERAR_IMAGEM:") and is_base64_like:
@@ -682,7 +709,6 @@ Siga estritamente.
                 prod_fname = os.path.join(OUTPUT_DIRECTORY, f"{prod_fname_base}{ext}")
                 try:
                     if output_type == "IMAGEM_PNG_BASE64":
-                        # Garante que actual_main_content_to_save é uma string base64 válida antes de decodificar
                         if re.match(r'^[A-Za-z0-9+/]+={0,2}$', actual_main_content_to_save) and len(actual_main_content_to_save) % 4 == 0:
                             with open(prod_fname, "wb") as f_prod: f_prod.write(base64.b64decode(actual_main_content_to_save))
                             print_agent_message(agent_display_name, f"Produto ({output_type}) salvo: {prod_fname}")
@@ -714,7 +740,7 @@ Você é um Agente Executor. Tarefa atual: "{sub_task_description}"
 Contexto (resultados anteriores, objetivo original, arquivos):
 {context_text_part}
 Execute a tarefa. Se for "Criar uma descrição textual detalhada (prompt) para gerar a imagem de [...]", seu resultado DEVE ser APENAS essa descrição.
-Se identificar NOVAS sub-tarefas cruciais, liste-as em 'NOVAS_TAREFAS_SUGERIDAS:' como array JSON. Se não, omita.
+Se identificar NOVAS sub-tarefas cruciais, liste-as em 'NOVAS_TAREFAS_SUGERIDAS:' como array JSON de strings. Se não, omita.
 Resultado da Tarefa:
 """
         prompt_parts = [prompt_text_for_worker] + uploaded_file_objects
@@ -730,36 +756,46 @@ Resultado da Tarefa:
             log_message(f"Worker: resposta vazia para '{sub_task_description}'.", agent_display_name)
             return "Resposta vazia da API.", []
 
-        task_res, sugg_tasks = response_text, []
+        task_res, sugg_tasks_strings = response_text, [] # Garante que sugg_tasks_strings seja uma lista de strings
         marker = "NOVAS_TAREFAS_SUGERIDAS:"
         if marker in response_text:
             parts = response_text.split(marker, 1)
             task_res = parts[0].strip()
-            potential_json = parts[1].strip()
-            log_message(f"Worker: potencial novas tarefas. Parte: {potential_json}", agent_display_name)
+            potential_json_or_list = parts[1].strip()
+            log_message(f"Worker: potencial novas tarefas. Parte: {potential_json_or_list}", agent_display_name)
             try:
-                json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', potential_json, re.DOTALL)
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', potential_json_or_list, re.DOTALL)
+                parsed_suggestions = []
                 if json_match:
                     json_str = json_match.group(1) or json_match.group(2)
-                    parsed = json.loads(json_str)
-                    if isinstance(parsed, list): sugg_tasks = [str(t).strip() for t in parsed if str(t).strip()]
-                else:
-                     lines = [ln.strip() for ln in potential_json.splitlines() if ln.strip() and not ln.startswith('[') and not ln.startswith(']')]
-                     if lines: sugg_tasks = lines
-                log_message(f"Novas tarefas sugeridas (filtradas): {sugg_tasks}", agent_display_name)
-            except Exception as e: log_message(f"Erro ao processar novas tarefas: {e}. Parte: {potential_json}\n{traceback.format_exc()}", agent_display_name)
+                    parsed_suggestions = json.loads(json_str)
+                else: # Fallback para linhas se não for JSON claro
+                     lines = [ln.strip() for ln in potential_json_or_list.splitlines() if ln.strip() and not ln.startswith('[') and not ln.startswith(']')]
+                     if lines: parsed_suggestions = lines
+                
+                # Garante que sugg_tasks_strings seja uma lista de strings
+                if isinstance(parsed_suggestions, list):
+                    for item in parsed_suggestions:
+                        if isinstance(item, str):
+                            sugg_tasks_strings.append(item.strip())
+                        elif isinstance(item, dict) and "tarefa" in item and isinstance(item["tarefa"], str):
+                             sugg_tasks_strings.append(item["tarefa"].strip())
+                        # Ignora outros formatos
+                log_message(f"Novas tarefas sugeridas (strings filtradas): {sugg_tasks_strings}", agent_display_name)
+            except Exception as e:
+                log_message(f"Erro ao processar novas tarefas: {e}. Parte: {potential_json_or_list}\n{traceback.format_exc()}", agent_display_name)
         
         if task_res.lower().startswith("resultado da tarefa:"):
             task_res = task_res[len("resultado da tarefa:"):].strip()
         
         log_message(f"Resultado da sub-tarefa '{sub_task_description}': {task_res[:200]}...", agent_display_name)
-        return task_res, sugg_tasks
+        return task_res, sugg_tasks_strings
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v8.0"
+    SCRIPT_VERSION = "v8.1"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
-    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Correção ImageWorker bytes para base64 string) ---")
+    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Correção AttributeError dict.startswith) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas: {OUTPUT_DIRECTORY}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
     
     initial_goal_input = input("🎯 Defina a meta principal: ")
@@ -775,5 +811,3 @@ if __name__ == "__main__":
 
     log_message(f"--- Fim da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print("\n--- Fim da Execução ---")
-
-
