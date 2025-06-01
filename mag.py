@@ -6,7 +6,7 @@ import datetime
 import re
 import traceback
 import base64
-import glob # Adicionado para encontrar o arquivo de cache mais recente
+import glob
 
 # --- Configuração dos Diretórios e Arquivos ---
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -20,7 +20,6 @@ for directory in [LOG_DIRECTORY, OUTPUT_DIRECTORY, UPLOADED_FILES_CACHE_DIR]:
 
 CURRENT_TIMESTAMP_STR = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 LOG_FILE_NAME = os.path.join(LOG_DIRECTORY, f"agent_log_{CURRENT_TIMESTAMP_STR}.txt")
-# O nome do arquivo de cache da sessão atual será definido em get_uploaded_files_info_from_user
 
 # --- Constantes para Retentativas ---
 MAX_API_RETRIES = 3
@@ -28,10 +27,12 @@ INITIAL_RETRY_DELAY_SECONDS = 5
 RETRY_BACKOFF_FACTOR = 2
 
 # --- Funções de Utilidade ---
-def sanitize_filename(name):
-    name = re.sub(r'[^\w\s-]', '', name).strip()
+def sanitize_filename(name, allow_extension=True):
+    name = re.sub(r'[^\w\s.-]', '', name).strip()
     name = re.sub(r'[-\s]+', '-', name)
-    return name[:50]
+    if not allow_extension:
+        name, _ = os.path.splitext(name)
+    return name[:100] # Aumentado para acomodar nomes de arquivo mais longos
 
 def log_message(message, source="Sistema"):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -58,7 +59,7 @@ except Exception as e:
 GEMINI_TEXT_MODEL_NAME = "gemini-2.0-flash"
 GEMINI_IMAGE_GENERATION_MODEL_NAME = "gemini-2.0-flash-preview-image-generation"
 
-log_message(f"Modelo Gemini (texto/lógica): {GEMINI_TEXT_MODEL_NAME} mais recente", "Sistema")
+log_message(f"Modelo Gemini (texto/lógica): {GEMINI_TEXT_MODEL_NAME}", "Sistema")
 log_message(f"Modelo Gemini (geração de imagem via SDK): {GEMINI_IMAGE_GENERATION_MODEL_NAME}", "Sistema")
 
 generation_config_text = {
@@ -93,7 +94,7 @@ def print_user_message(message):
     print(console_message); log_message(message, "Usuário")
 
 def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GEMINI_TEXT_MODEL_NAME, gen_config=None):
-    # ... (código idêntico à v8.1)
+    # ... (código idêntico à v8.3)
     log_message(f"Iniciando chamada à API Gemini para {agent_name}...", "Sistema")
     text_prompt_for_log = ""
     file_references_for_log = []
@@ -165,7 +166,7 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GE
 
 # --- Funções de Arquivos ---
 def get_most_recent_cache_file():
-    """Encontra o arquivo de cache de metadados de upload mais recente."""
+    # ... (código idêntico à v8.3)
     try:
         list_of_files = glob.glob(os.path.join(UPLOADED_FILES_CACHE_DIR, "uploaded_files_info_*.json"))
         if not list_of_files:
@@ -177,7 +178,7 @@ def get_most_recent_cache_file():
         return None
 
 def load_cached_files_metadata(cache_file_path):
-    """Carrega metadados de um arquivo de cache JSON."""
+    # ... (código idêntico à v8.3)
     if not cache_file_path or not os.path.exists(cache_file_path):
         return []
     try:
@@ -195,12 +196,13 @@ def load_cached_files_metadata(cache_file_path):
         return []
 
 def get_uploaded_files_info_from_user():
+    # ... (código idêntico à v8.3)
     uploaded_file_objects = [] 
     uploaded_files_metadata = [] 
-    reused_file_ids = set() # Para rastrear IDs de arquivos reutilizados
+    reused_file_ids = set()
 
     print_agent_message("Sistema", "Verificando arquivos existentes na API Gemini...")
-    api_files_list = list(genai.list_files()) # Converte para lista para evitar problemas com iterador
+    api_files_list = list(genai.list_files())
     api_files_dict = {f.name: f for f in api_files_list}
     log_message(f"Encontrados {len(api_files_dict)} arquivos na API.", "Sistema")
 
@@ -216,7 +218,7 @@ def get_uploaded_files_info_from_user():
         for idx, cached_file_meta in enumerate(cached_metadata_list):
             file_id = cached_file_meta.get("file_id")
             display_name = cached_file_meta.get("display_name", "Nome Desconhecido")
-            if file_id in api_files_dict: # Verifica se o arquivo do cache ainda existe na API
+            if file_id in api_files_dict:
                 reusable_files_from_cache.append(cached_file_meta)
                 print(f"  {len(reusable_files_from_cache)}. {display_name} (ID: {file_id}, Tipo: {cached_file_meta.get('mime_type')})")
         
@@ -270,19 +272,23 @@ def get_uploaded_files_info_from_user():
                 print(f"❌ Arquivo '{fp}' inválido."); log_message(f"Arquivo '{fp}' inválido.", "Sistema"); continue
             
             dn = os.path.basename(fp)
-            # Verifica se um arquivo com o mesmo nome de exibição já foi reutilizado (para evitar confusão)
             if any(meta.get("display_name") == dn for meta in uploaded_files_metadata):
                 print_user_message(f"⚠️ Um arquivo chamado '{dn}' já foi reutilizado ou adicionado. Continuar com novo upload? (s/n)")
                 if input("➡️ ").strip().lower() != 's':
                     continue
             try:
                 print_agent_message("Sistema", f"Upload de '{dn}'...")
-                # Tenta especificar o mime_type se for um tipo comum não detectado
                 mime_type_upload = None
                 if dn.endswith(".md"): mime_type_upload = "text/markdown"
                 elif dn.endswith(".py"): mime_type_upload = "text/x-python"
-                elif dn.endswith(".cpp"): mime_type_upload = "text/x-c++src" # Exemplo
-                elif dn.endswith(".h"): mime_type_upload = "text/x-chdr" # Exemplo
+                elif dn.endswith(".cpp"): mime_type_upload = "text/x-c++src"
+                elif dn.endswith(".hpp"): mime_type_upload = "text/x-c++hdr"
+                elif dn.endswith(".h"): mime_type_upload = "text/x-chdr"
+                elif dn.endswith(".c"): mime_type_upload = "text/x-csrc"
+                elif dn.endswith("."): mime_type_upload = "text/plain"
+                elif dn.endswith(".gradle"): mime_type_upload = "text/plain" # Ou específico se houver
+                elif dn.lower() == "cmakelists.txt": mime_type_upload = "text/plain"
+
 
                 uf_args = {'path': fp, 'display_name': dn}
                 if mime_type_upload:
@@ -293,7 +299,7 @@ def get_uploaded_files_info_from_user():
                 uploaded_file_objects.append(uf)
                 fm = {"user_path":fp,"display_name":uf.display_name,"file_id":uf.name,"uri":uf.uri,"mime_type":uf.mime_type,"size_bytes":uf.size_bytes,"state":str(uf.state)}
                 uploaded_files_metadata.append(fm)
-                reused_file_ids.add(uf.name) # Adiciona à lista para evitar duplicação se o cache for usado na mesma sessão
+                reused_file_ids.add(uf.name)
                 print(f"✅ '{dn}' (ID: {uf.name}, Tipo: {uf.mime_type}) enviado!")
                 log_message(f"Novo arquivo '{dn}' (ID: {uf.name}, URI: {uf.uri}, Tipo: {uf.mime_type}, Tamanho: {uf.size_bytes}B) enviado.", "Sistema")
             except Exception as e:
@@ -397,7 +403,7 @@ class ImageWorker:
 
 # --- Classe TaskManager ---
 class TaskManager:
-    # ... (código de __init__, decompose_task, confirm_new_tasks_with_llm, evaluate_and_select_image_concepts, run_workflow, extract_structured_output, validate_and_save_final_output idêntico à v8.2, pois as correções para o bug do dict já estavam na v8.1 e foram mantidas na v8.2)
+    # ... (__init__, decompose_task, confirm_new_tasks_with_llm, evaluate_and_select_image_concepts, run_workflow, extract_structured_output - código idêntico à v8.2)
     def __init__(self):
         self.gemini_text_model_name = GEMINI_TEXT_MODEL_NAME
         self.worker = Worker()
@@ -449,7 +455,6 @@ Sub-tarefas:
                          self.task_list = [task_item["tarefa"] for task_item in parsed_tasks]
                          log_message("Decomposição retornou lista de dicionários, extraindo strings de 'tarefa'.", agent_display_name)
                     else:
-                        # Se não for lista de strings nem lista de dicts com 'tarefa', tenta tratar como lista de strings (caso o LLM retorne strings simples sem aspas corretas no JSON)
                         if isinstance(parsed_tasks, list):
                             self.task_list = [str(task) for task in parsed_tasks]
                             log_message("Decomposição retornou lista de itens não-string/não-dict, convertendo para strings.", agent_display_name)
@@ -462,7 +467,6 @@ Sub-tarefas:
                     return True
                 else:
                     log_message(f"Decomposição não retornou JSON no formato esperado. Resposta: {response_text}", agent_display_name)
-                    # Tenta interpretar como uma lista de strings simples se não houver JSON
                     lines = [line.strip().replace('"', '').replace(',', '') for line in response_text.splitlines() if line.strip() and not line.strip().startswith(('[', ']'))]
                     if lines:
                         self.task_list = lines
@@ -473,7 +477,6 @@ Sub-tarefas:
 
 
             except json.JSONDecodeError as e:
-                # Se o JSON falhar, tenta tratar a resposta como uma lista de strings separadas por nova linha
                 log_message(f"Falha ao decodificar JSON da decomposição: {e}. Tentando interpretar como lista de strings.", agent_display_name)
                 lines = [line.strip().replace('"', '').replace(',', '') for line in response_text.splitlines() if line.strip() and not line.strip().startswith(('[', ']'))]
                 if lines:
@@ -625,7 +628,6 @@ Prompts Selecionados (JSON Array):
         log_message(f"Conceitos validados para prosseguir: {len(validated_concepts)}", agent_display_name)
         return validated_concepts
 
-
     def run_workflow(self, initial_goal, uploaded_file_objects, uploaded_files_metadata):
         agent_display_name = "Task Manager"
         print_agent_message(agent_display_name, "Iniciando fluxo de trabalho...")
@@ -754,7 +756,6 @@ Prompts Selecionados (JSON Array):
         log_message(f"Output Extraído: Tipo={output_type}, Conteúdo~{main_content[:100]}..., Avaliação~{evaluation_text[:100]}...", "TM(Val)")
         return output_type, main_content, evaluation_text
 
-
     def validate_and_save_final_output(self, original_goal, uploaded_file_objects, files_metadata_for_prompt_text):
         agent_display_name = "Task Manager (Validação)"
         print_agent_message(agent_display_name, "Validando resultado final...")
@@ -764,56 +765,110 @@ Prompts Selecionados (JSON Array):
 
         results_summary_text = f"Meta Original: {original_goal}\nArquivos: {files_metadata_for_prompt_text}\nResultados Sub-tarefas:\n"
         
-        validated_and_generated_images = [] # Lista de dicts: {"prompt": str, "base64": str}
+        # Lista para armazenar informações de arquivos de código a serem salvos
+        # Cada item: {"filename": "nome.ext", "content": "conteúdo_do_arquivo"}
+        code_files_to_save = [] 
+        # Lista para armazenar informações de imagens a serem salvas
+        # Cada item: {"prompt": "prompt_usado", "base64": "string_base64"}
+        images_to_save = []
         
-        evaluation_task_result_obj = next((res for res in self.completed_tasks_results if res["task"].startswith("TASK_AVALIAR_IMAGENS:")), None)
+        # Coleta de arquivos de código e imagens das tarefas
+        for task_result_obj in self.completed_tasks_results:
+            task_description = task_result_obj.get("task", "")
+            result_content = task_result_obj.get("result", "")
 
-        if evaluation_task_result_obj and isinstance(evaluation_task_result_obj.get("result"), list):
-            validated_concepts_list = evaluation_task_result_obj.get("result")
-            results_summary_text += f"- Tarefa: {evaluation_task_result_obj['task']}\n  Conceitos Avaliados ({len(validated_concepts_list)} validados pelo Diretor de Arte):\n"
-            for idx, concept in enumerate(validated_concepts_list):
-                prompt = concept.get("image_prompt_selected", "N/A")
-                gen_result = concept.get("result")
-                is_success = isinstance(gen_result, str) and len(gen_result) > 100 and not gen_result.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', gen_result.strip())
+            if task_description.startswith("TASK_GERAR_ARQUIVOS_FONTE:") or \
+               task_description.startswith("TASK_BINDINGS_") or \
+               "modifica" in task_description.lower() or "implementar" in task_description.lower(): # Heurística
                 
-                status_text = "Sucesso (imagem base64)" if is_success else str(gen_result)
-                results_summary_text += f"    - Conceito {idx+1} (Prompt: {prompt[:100]}...): {status_text[:100]}...\n"
-                if is_success:
-                    validated_and_generated_images.append({"prompt": prompt, "base64": gen_result.strip()})
-            results_summary_text += "\n"
-        else:
-            log_message("Nenhum resultado da tarefa TASK_AVALIAR_IMAGENS encontrado ou não é uma lista.", agent_display_name)
+                # Tenta extrair blocos de código e nomes de arquivo da string de resultado
+                # Isso precisa ser robusto, pois o LLM pode formatar de várias maneiras
+                # Exemplo simples: procurar por ```cpp nome_arquivo.cpp ... ```
+                # ou por "Arquivo X (Novo/Modificado):" seguido de ```código```
+                
+                # Heurística para blocos de código delimitados por ```
+                code_blocks = re.findall(r"```(?:(\w+)\s*\n)?([\s\S]*?)```", str(result_content))
+                # Heurística para nomes de arquivo mencionados antes dos blocos
+                filename_mentions = re.findall(r"([a-zA-Z0-9_.-]+\.(?:cpp|h|py|md|txt|gradle|cmake|json|sh|pyx))\s*\(?(?:Novo|Modificado)?\)?[:\s]*\n```", str(result_content), re.IGNORECASE)
+                
+                if code_blocks:
+                    log_message(f"Encontrados {len(code_blocks)} blocos de código na tarefa: '{task_description}'", agent_display_name)
+                    for i, (lang, code) in enumerate(code_blocks):
+                        filename = f"arquivo_gerado_{task_description[:20].replace(':', '_')}_{i+1}.{lang if lang else 'txt'}"
+                        # Tenta usar um nome de arquivo mencionado se disponível e corresponder
+                        if i < len(filename_mentions):
+                            filename = filename_mentions[i]
+                        
+                        # Evita duplicatas se o mesmo arquivo for mencionado várias vezes com o mesmo conteúdo
+                        existing_file = next((f for f in code_files_to_save if f["filename"] == filename and f["content"] == code.strip()), None)
+                        if not existing_file:
+                            code_files_to_save.append({"filename": sanitize_filename(filename), "content": code.strip()})
+                            log_message(f"Arquivo '{filename}' adicionado para salvamento.", agent_display_name)
+                        else:
+                            log_message(f"Conteúdo duplicado para '{filename}' ignorado.", agent_display_name)
 
-        # Adiciona outros resultados ao sumário
+            elif task_description.startswith("TASK_AVALIAR_IMAGENS:") and isinstance(result_content, list):
+                # result_content é a lista de validated_image_concepts
+                for concept in result_content:
+                    prompt_sel = concept.get("image_prompt_selected")
+                    gen_res = concept.get("result")
+                    is_b64_success = isinstance(gen_res, str) and len(gen_res) > 100 and not gen_res.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', gen_res.strip())
+                    if is_b64_success:
+                        images_to_save.append({"prompt": prompt_sel, "base64": gen_res.strip()})
+                        log_message(f"Imagem para prompt '{prompt_sel[:50]}...' adicionada para salvamento.", agent_display_name)
+
+        # Construção do sumário para o LLM de validação
+        results_summary_text += f"\n--- ARQUIVOS DE CÓDIGO IDENTIFICADOS PARA SALVAMENTO ({len(code_files_to_save)}) ---\n"
+        for cf in code_files_to_save:
+            results_summary_text += f"- {cf['filename']} ({len(cf['content'])} chars)\n"
+        
+        results_summary_text += f"\n--- IMAGENS IDENTIFICADAS PARA SALVAMENTO ({len(images_to_save)}) ---\n"
+        for img_info in images_to_save:
+            results_summary_text += f"- Imagem para prompt: {img_info['prompt'][:100]}...\n"
+        results_summary_text += "\n--- DETALHES DAS TAREFAS ---\n"
+        # ... (lógica anterior para adicionar detalhes das tarefas ao sumário) ...
         for item in self.completed_tasks_results:
-            if not item["task"].startswith("TASK_AVALIAR_IMAGENS:"):
-                result_display = item.get('result', 'N/A')
-                if item['task'].startswith("TASK_GERAR_IMAGEM:"):
-                    is_base64_like = isinstance(result_display,str) and len(result_display)>100 and not result_display.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', result_display.strip())
-                    if is_base64_like:
-                        was_validated = any(img_info["base64"] == result_display.strip() for img_info in validated_and_generated_images)
-                        result_display = f"[IMAGEM GERADA - {'Validada e salva' if was_validated else 'Não validada / Outra variação'}]"
-                    else:
-                        result_display = f"[TENTATIVA DE GERAR IMAGEM - Falhou: {result_display}]"
-                results_summary_text += f"- Tarefa: {item['task']}\n  Resultado: {str(result_display)[:300]}...\n\n"
+            res_disp = item.get('result', 'N/A')
+            if item['task'].startswith("TASK_AVALIAR_IMAGENS:") and isinstance(res_disp, list):
+                results_summary_text += f"Tarefa: {item['task']}\n  Conceitos Avaliados ({len(res_disp)} validados):\n"
+                for idx_c, concept_c in enumerate(res_disp):
+                    prompt_s = concept_c.get("image_prompt_selected", "N/A")
+                    gen_r = concept_c.get("result")
+                    is_b64_c = isinstance(gen_r,str) and len(gen_r)>100 and not gen_r.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', gen_r.strip())
+                    status_c = "[IMAGEM BASE64 SELECIONADA]" if is_b64_c else str(gen_r)
+                    results_summary_text +=f"    - Conceito {idx_c+1} (Prompt: {prompt_s[:100]}...): {status_c[:100]}...\n"
+            elif item['task'].startswith("TASK_GERAR_ARQUIVOS_FONTE:") or "modifica" in item['task'].lower():
+                results_summary_text +=f"Tarefa: {item['task']}\n  Resultado: [Conteúdo de código - veja arquivos salvos separadamente]\n"
+            else: # Outras tarefas, incluindo geração de imagem individual
+                is_b64_like = isinstance(res_disp,str) and len(res_disp)>100 and not res_disp.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', res_disp.strip())
+                res_disp_str = f"[IMAGEM BASE64 - {len(res_disp)} chars]" if is_b64_like else str(res_disp)
+                results_summary_text += f"Tarefa: {item['task']}\nResultado: {res_disp_str[:300]}...\n"
+            results_summary_text += "\n"
+
 
         prompt_text_part_validation = f"""
 Você é um Gerenciador de Tarefas especialista em validação. Meta original: "{original_goal}"
-Arquivos: {files_metadata_for_prompt_text}
-Resultados das sub-tarefas:
+Arquivos de entrada: {files_metadata_for_prompt_text}
+Sumário dos Resultados das Sub-tarefas (incluindo arquivos de código e imagens identificados para salvamento):
 {results_summary_text}
+
 Com base nisso, sua tarefa é:
-1.  Identificar o TIPO DE SAÍDA PRINCIPAL. Se uma ou mais imagens foram validadas e geradas com sucesso, use IMAGEM_PNG_BASE64. Caso contrário, TEXTO_GERAL.
-2.  Fornecer o CONTEÚDO PRINCIPAL PARA SALVAR (para o arquivo de avaliação).
-    - Se o tipo for IMAGEM_PNG_BASE64, use a placeholder "[IMAGEM_BASE64_AQUI_PRINCIPAL]" (referindo-se à primeira imagem validada).
-    - Para TEXTO_GERAL, forneça um resumo textual dos resultados.
-3.  Fornecer uma AVALIAÇÃO GERAL da execução, mencionando quantas imagens foram validadas e efetivamente salvas (se houver).
-Formato:
-TIPO_DE_SAIDA_PRINCIPAL: [TIPO]
+1.  Identificar o TIPO_DE_SAIDA_PRINCIPAL. Se múltiplos arquivos de código foram gerados/modificados E um relatório detalhado é solicitado, use RELATORIO_TECNICO_E_CODIGOS. Se imagens foram geradas, adicione IMAGEM_PNG_BASE64 (o sistema salvará todas as imagens válidas). Se for principalmente textual, use TEXTO_GERAL. Combine se necessário (ex: RELATORIO_TECNICO_E_CODIGOS, IMAGEM_PNG_BASE64).
+2.  Fornecer o CONTEUDO_PRINCIPAL_PARA_SALVAR. Este deve ser o RELATÓRIO DETALHADO em formato Markdown, conforme solicitado na meta original. O relatório deve incluir:
+    * Para cada arquivo de código fonte modificado ou criado (listado no sumário):
+        * Nome do arquivo.
+        * Um resumo das modificações (linhas adicionadas/removidas, motivo) com base nos resultados das tarefas. Use blocos diff se disponíveis nos resultados das tarefas.
+    * Uma lista dos arquivos de código que serão salvos separadamente.
+    * Se um APK foi o objetivo, liste os arquivos de configuração de build gerados (ex: CMakeLists.txt, build.gradle) e os comandos necessários para construir o APK manualmente.
+3.  Fornecer uma AVALIACAO_GERAL da execução, mencionando se o objetivo principal foi alcançado, quantos arquivos de código foram gerados/modificados, quantas imagens foram salvas, e se o APK pode ser construído.
+
+Formato da Resposta:
+TIPO_DE_SAIDA_PRINCIPAL: [TIPO1, TIPO2 (se aplicável)]
 CONTEUDO_PRINCIPAL_PARA_SALVAR:
-[Conteúdo textual ou "[IMAGEM_BASE64_AQUI_PRINCIPAL]"]
+[Relatório detalhado em Markdown aqui]
 AVALIACAO_GERAL:
-[Avaliação]
+[Avaliação geral aqui]
+
 Siga estritamente.
 """
         llm_full_response = call_gemini_api_with_retry(
@@ -825,81 +880,88 @@ Siga estritamente.
 
         if llm_full_response:
             print_agent_message(agent_display_name, f"--- RESPOSTA VALIDAÇÃO (BRUTA) ---\n{llm_full_response}")
-            output_type, main_content_from_llm, evaluation_text = self.extract_structured_output(llm_full_response)
+            output_type_str, main_report_content, evaluation_text = self.extract_structured_output(llm_full_response)
+            output_types = [ot.strip() for ot in output_type_str.split(',')]
+
+            goal_slug = sanitize_filename(original_goal, allow_extension=False)
             
-            actual_main_content_to_save_for_assessment = main_content_from_llm
-
-            if output_type == "IMAGEM_PNG_BASE64":
-                if not validated_and_generated_images: # LLM indicou imagem, mas não temos nenhuma.
-                    output_type = "TEXTO_GERAL"
-                    actual_main_content_to_save_for_assessment = f"Erro: LLM indicou saída de imagem, mas nenhuma imagem válida foi gerada/selecionada.\nConteúdo original do LLM: {main_content_from_llm if main_content_from_llm != '[IMAGEM_BASE64_AQUI_PRINCIPAL]' else ''}"
-                    evaluation_text += "\nNOTA: O tipo de saída foi alterado para TEXTO_GERAL pois nenhuma imagem válida estava disponível."
-                    log_message("LLM indicou IMAGEM_PNG_BASE64, mas nenhuma imagem válida disponível. Revertendo para TEXTO_GERAL.", agent_display_name)
-                elif main_content_from_llm == "[IMAGEM_BASE64_AQUI_PRINCIPAL]": # Usa a primeira imagem para o snippet de avaliação
-                     actual_main_content_to_save_for_assessment = validated_and_generated_images[0]["base64"]
-
-            print_agent_message(agent_display_name, f"Tipo Saída Final (para avaliação): {output_type}")
-            print_agent_message(agent_display_name, f"Conteúdo Principal (para avaliação): {str(actual_main_content_to_save_for_assessment)[:200]}...")
-            print_agent_message(agent_display_name, f"Avaliação Geral: {evaluation_text}")
-
-            goal_slug = sanitize_filename(original_goal)
-            assessment_file_name = os.path.join(OUTPUT_DIRECTORY, f"avaliacao_completa_{goal_slug}_{CURRENT_TIMESTAMP_STR}.txt")
+            # Salvar o relatório principal (arquivo de avaliação)
+            assessment_file_name = os.path.join(OUTPUT_DIRECTORY, f"avaliacao_completa_{goal_slug}_{CURRENT_TIMESTAMP_STR}.md") # Salvar como .md
             try:
                 with open(assessment_file_name, "w", encoding="utf-8") as f:
-                    f.write(f"Meta: {original_goal}\nArquivos: {files_metadata_for_prompt_text}\n--- RESULTADOS SUB-TAREFAS ---\n")
-                    for item in self.completed_tasks_results:
-                        res_disp = item.get('result', 'N/A')
-                        if item['task'].startswith("TASK_AVALIAR_IMAGENS:") and isinstance(res_disp, list):
-                            f.write(f"Tarefa: {item['task']}\n  Conceitos Avaliados ({len(res_disp)} validados pelo Diretor de Arte):\n")
-                            for idx_c, concept_c in enumerate(res_disp):
-                                prompt_s = concept_c.get("image_prompt_selected", "N/A")
-                                gen_r = concept_c.get("result")
-                                is_b64_c = isinstance(gen_r,str) and len(gen_r)>100 and not gen_r.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', gen_r.strip())
-                                status_c = "[IMAGEM BASE64 SELECIONADA]" if is_b64_c else str(gen_r)
-                                f.write(f"    - Conceito {idx_c+1} (Prompt: {prompt_s[:100]}...): {status_c[:100]}...\n")
-                        elif item['task'].startswith("TASK_GERAR_IMAGEM:"):
-                             is_b64_like = isinstance(res_disp,str) and len(res_disp)>100 and not res_disp.startswith("Falha") and re.match(r'^[A-Za-z0-9+/]+={0,2}$', res_disp.strip())
-                             res_disp_str = f"[IMAGEM BASE64 - {len(res_disp)} chars]" if is_b64_like else str(res_disp)
-                             f.write(f"Tarefa: {item['task']}\nResultado: {res_disp_str[:1000]}...\n")
-                        else:
-                            f.write(f"Tarefa: {item['task']}\nResultado: {str(res_disp)[:1000]}...\n")
-                        f.write("\n")
-                    f.write(f"--- VALIDAÇÃO FINAL ---\nTIPO: {output_type}\nCONTEÚDO (snippet para avaliação): {str(actual_main_content_to_save_for_assessment)[:1000]}...\nAVALIAÇÃO: {evaluation_text}\n")
-                print_agent_message(agent_display_name, f"Avaliação salva: {assessment_file_name}")
-            except Exception as e: print_agent_message(agent_display_name, f"Erro ao salvar avaliação: {e}\n{traceback.format_exc()}")
+                    f.write(f"# Relatório de Execução da Meta: {original_goal}\n\n")
+                    f.write(f"## Arquivos de Entrada Fornecidos:\n{files_metadata_for_prompt_text}\n\n")
+                    f.write(f"## Sumário dos Resultados das Sub-Tarefas (Interno):\n{results_summary_text}\n\n") # Sumário interno para depuração
+                    f.write(f"## Relatório Detalhado Gerado pela IA (CONTEUDO_PRINCIPAL_PARA_SALVAR):\n\n{main_report_content}\n\n")
+                    f.write(f"## Avaliação Geral da IA:\n\n{evaluation_text}\n")
+                print_agent_message(agent_display_name, f"Relatório de avaliação salvo: {assessment_file_name}")
+            except Exception as e:
+                print_agent_message(agent_display_name, f"Erro ao salvar relatório de avaliação: {e}\n{traceback.format_exc()}")
 
-            # Salvando TODAS as imagens validadas e geradas com sucesso
-            if validated_and_generated_images:
-                log_message(f"Salvando {len(validated_and_generated_images)} imagem(ns) validada(s)...", agent_display_name)
-                for idx, img_data in enumerate(validated_and_generated_images):
+            # Salvar arquivos de código identificados
+            if code_files_to_save:
+                log_message(f"Salvando {len(code_files_to_save)} arquivo(s) de código...", agent_display_name)
+                code_output_dir = os.path.join(OUTPUT_DIRECTORY, f"codigos_gerados_{goal_slug}_{CURRENT_TIMESTAMP_STR}")
+                if not os.path.exists(code_output_dir):
+                    os.makedirs(code_output_dir)
+                
+                for code_file_info in code_files_to_save:
+                    filename = sanitize_filename(code_file_info["filename"])
+                    content = code_file_info["content"]
+                    # Extrai a extensão original para usar no nome do arquivo salvo
+                    original_name, original_ext = os.path.splitext(code_file_info["filename"])
+                    if not original_ext: # Adiciona .txt se não houver extensão
+                        original_ext = ".txt"
+                    
+                    # Sanitiza o nome base e adiciona a extensão original
+                    sanitized_base = sanitize_filename(original_name, allow_extension=False)
+                    final_filename = f"{sanitized_base}{original_ext}"
+                    
+                    prod_fname = os.path.join(code_output_dir, final_filename)
+                    try:
+                        with open(prod_fname, "w", encoding="utf-8") as f_prod:
+                            f_prod.write(content)
+                        print_agent_message(agent_display_name, f"Arquivo de código salvo: {prod_fname}")
+                    except Exception as e:
+                        print_agent_message(agent_display_name, f"Erro ao salvar arquivo de código '{final_filename}': {e}")
+            else:
+                log_message("Nenhum arquivo de código identificado para salvamento.", agent_display_name)
+
+
+            # Salvando todas as imagens validadas e geradas com sucesso
+            if images_to_save:
+                log_message(f"Salvando {len(images_to_save)} imagem(ns) validada(s)...", agent_display_name)
+                image_output_dir = os.path.join(OUTPUT_DIRECTORY, f"imagens_geradas_{goal_slug}_{CURRENT_TIMESTAMP_STR}")
+                if not os.path.exists(image_output_dir):
+                    os.makedirs(image_output_dir)
+
+                for idx, img_data in enumerate(images_to_save):
                     img_base64 = img_data["base64"]
-                    img_prompt_slug = sanitize_filename(img_data["prompt"][:30])
-                    prod_fname = os.path.join(OUTPUT_DIRECTORY, f"produto_imagem-png-base64_{goal_slug}_{CURRENT_TIMESTAMP_STR}_{idx+1}_{img_prompt_slug}.png")
+                    img_prompt_slug = sanitize_filename(img_data["prompt"][:30], allow_extension=False)
+                    prod_fname = os.path.join(image_output_dir, f"imagem_{idx+1}_{img_prompt_slug}.png")
                     try:
                         if re.match(r'^[A-Za-z0-9+/]+={0,2}$', img_base64) and len(img_base64) % 4 == 0:
                             with open(prod_fname, "wb") as f_prod: f_prod.write(base64.b64decode(img_base64))
-                            print_agent_message(agent_display_name, f"Produto (IMAGEM_PNG_BASE64 {idx+1}) salvo: {prod_fname}")
+                            print_agent_message(agent_display_name, f"Imagem salva: {prod_fname}")
                         else:
-                             print_agent_message(agent_display_name, f"Erro: Conteúdo para IMAGEM_PNG_BASE64 {idx+1} não parece ser base64 válido. Não salvo.")
-                             log_message(f"Conteúdo para IMAGEM_PNG_BASE64 {idx+1} não é base64 válido.", agent_display_name)
-                    except Exception as e: print_agent_message(agent_display_name, f"Erro ao salvar produto (IMAGEM_PNG_BASE64 {idx+1}): {e}\n{traceback.format_exc()}")
+                             print_agent_message(agent_display_name, f"Erro: Conteúdo para imagem {idx+1} não parece ser base64 válido. Não salvo.")
+                    except Exception as e: print_agent_message(agent_display_name, f"Erro ao salvar imagem {idx+1}: {e}")
             
-            # Salva um produto textual principal se não houver imagens OU se o tipo de saída principal for TEXTO_GERAL
-            # e o conteúdo for válido.
-            elif output_type == "TEXTO_GERAL" and \
-                 actual_main_content_to_save_for_assessment and \
-                 actual_main_content_to_save_for_assessment.strip() and \
-                 actual_main_content_to_save_for_assessment != "[IMAGEM_BASE64_AQUI_PRINCIPAL]":
+            # Salvar um "produto principal" textual se não houver código ou imagens, e o tipo for TEXTO_GERAL
+            if not code_files_to_save and not images_to_save and "TEXTO_GERAL" in output_types and \
+               main_report_content and main_report_content.strip() and \
+               main_report_content != "[IMAGEM_BASE64_AQUI_PRINCIPAL]":
                 
                 prod_fname_text = os.path.join(OUTPUT_DIRECTORY, f"produto_texto-geral_{goal_slug}_{CURRENT_TIMESTAMP_STR}.txt")
                 try:
                     with open(prod_fname_text, "w", encoding="utf-8") as f_prod:
-                        f_prod.write(actual_main_content_to_save_for_assessment)
-                    print_agent_message(agent_display_name, f"Produto (TEXTO_GERAL) salvo: {prod_fname_text}")
+                        f_prod.write(main_report_content) # Salva o relatório como produto textual principal
+                    print_agent_message(agent_display_name, f"Produto textual principal salvo: {prod_fname_text}")
                 except Exception as e:
-                    print_agent_message(agent_display_name, f"Erro ao salvar produto textual: {e}")
-            else:
-                log_message(f"Nenhum produto principal salvo (sem imagens validadas ou conteúdo textual vazio/placeholder).", agent_display_name)
+                    print_agent_message(agent_display_name, f"Erro ao salvar produto textual principal: {e}")
+            elif not code_files_to_save and not images_to_save:
+                 log_message(f"Nenhum produto principal (código, imagem ou texto significativo) para salvar.", agent_display_name)
+
 
             print_agent_message(agent_display_name, "--- FIM DA VALIDAÇÃO ---")
         else: print_agent_message(agent_display_name, "Falha ao obter avaliação final da API.")
@@ -921,16 +983,12 @@ Você é um Agente Executor. Tarefa atual: "{sub_task_description}"
 Contexto (resultados anteriores, objetivo original, arquivos):
 {context_text_part}
 Execute a tarefa. Se for "Criar uma descrição textual detalhada (prompt) para gerar a imagem de [...]", seu resultado DEVE ser APENAS essa descrição.
+Se a tarefa envolver modificar ou criar arquivos de código (C++, Python, CMakeLists.txt, build.gradle, .h, .md, .json, etc.), forneça o CONTEÚDO COMPLETO do arquivo modificado ou novo, claramente delimitado por \\\`\\\`\\\`[linguagem] ... \\\`\\\`\\\` ou \\\`\\\`\\\`diff ... \\\`\\\`\\\`. Indique o NOME DO ARQUIVO antes de cada bloco de código.
 Se identificar NOVAS sub-tarefas cruciais, liste-as em 'NOVAS_TAREFAS_SUGERIDAS:' como array JSON de strings. Se não, omita.
 Resultado da Tarefa:
 """
         prompt_parts = [prompt_text_for_worker] + uploaded_file_objects
-        response_text = call_gemini_api_with_retry(
-            prompt_parts,
-            agent_display_name,
-            model_name=self.gemini_model_name,
-            gen_config=generation_config_text
-        )
+        response_text = call_gemini_api_with_retry(prompt_parts,agent_display_name,model_name=self.gemini_model_name,gen_config=generation_config_text)
 
         if response_text is None: return None, []
         if not response_text.strip():
@@ -967,20 +1025,19 @@ Resultado da Tarefa:
         if task_res.lower().startswith("resultado da tarefa:"):
             task_res = task_res[len("resultado da tarefa:"):].strip()
         
-        log_message(f"Resultado da sub-tarefa '{sub_task_description}': {task_res[:200]}...", agent_display_name)
+        log_message(f"Resultado da sub-tarefa '{sub_task_description}': {task_res[:500]}...", agent_display_name) # Log maior do resultado
         return task_res, sugg_tasks_strings
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v8.3"
+    SCRIPT_VERSION = "v8.4"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
-    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Reutilização de Arquivos Cache) ---")
+    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Salvamento Aprimorado de Múltiplos Arquivos e Relatório) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas: {OUTPUT_DIRECTORY}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
     
     initial_goal_input = input("🎯 Defina a meta principal: ")
     print_user_message(initial_goal_input)
     
-    # A função get_uploaded_files_info_from_user agora lida com cache e novos uploads
     uploaded_files, uploaded_files_meta = get_uploaded_files_info_from_user()
 
     if not initial_goal_input.strip():
