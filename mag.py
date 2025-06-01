@@ -978,12 +978,12 @@ class Worker:
         agent_display_name = "Worker"
         print_agent_message(agent_display_name, f"Executando: '{sub_task_description}'")
         
-        prompt_text_for_worker = f"""
+        prompt_text_for_worker = rf"""
 Você é um Agente Executor. Tarefa atual: "{sub_task_description}"
 Contexto (resultados anteriores, objetivo original, arquivos):
 {context_text_part}
 Execute a tarefa. Se for "Criar uma descrição textual detalhada (prompt) para gerar a imagem de [...]", seu resultado DEVE ser APENAS essa descrição.
-Se a tarefa envolver modificar ou criar arquivos de código (C++, Python, CMakeLists.txt, build.gradle, .h, .md, .json, etc.), forneça o CONTEÚDO COMPLETO do arquivo modificado ou novo, claramente delimitado por \\\`\\\`\\\`[linguagem] ... \\\`\\\`\\\` ou \\\`\\\`\\\`diff ... \\\`\\\`\\\`. Indique o NOME DO ARQUIVO antes de cada bloco de código.
+Se a tarefa envolver modificar ou criar arquivos de código (C++, Python, CMakeLists.txt, build.gradle, .h, .md, .json, etc.), forneça o CONTEÚDO COMPLETO do arquivo modificado ou novo, claramente delimitado por ```[linguagem] ... ``` ou ```diff ... ```. Indique o NOME DO ARQUIVO antes de cada bloco de código.
 Se identificar NOVAS sub-tarefas cruciais, liste-as em 'NOVAS_TAREFAS_SUGERIDAS:' como array JSON de strings. Se não, omita.
 Resultado da Tarefa:
 """
