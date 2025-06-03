@@ -238,109 +238,108 @@ class Worker:
             " * Indique o NOME DO ARQUIVO CLARAMENTE ANTES de cada bloco de código/markdown usando o formato:\n   \"Arquivo: nome_completo.ext\"\n   ```linguagem_ou_extensao\n   // Conteúdo completo...\n   ```",
             " * Para arquivos Markdown, use `markdown` como linguagem.",
             " * Se precisar retornar múltiplos arquivos, repita o formato ou use JSON: {\"resultado\": \"descrição\", \"arquivos\": [{\"nome\": \"f1.cpp\", \"conteudo\": \"...\"}]}",
-            " * Se identificar NOVAS sub-tarefas cruciais, liste-as em 'NOVAS_TAREFAS_SUGERIDAS:' como um array JSON de strings válidas. Se não houver sugestões, omita completamente a seção 'NOVAS_TAREFAS_SUGERIDAS:' ou retorne um array JSON vazio []. Não retorne placeholders como '[Array JSON...]'.",
+            " * Se identificar NOVAS sub-tarefas cruciais, liste-as APÓS todo o conteúdo principal e artefatos, na seção 'NOVAS_TAREFAS_SUGERIDAS:' como um novo array JSON de strings válidas. Se não houver sugestões, omita completamente a seção 'NOVAS_TAREFAS_SUGERIDAS:' ou retorne um array JSON vazio []. Não retorne placeholders como '[Array JSON...]'.",
             "Resultado da Tarefa:", "[Resultado principal...]", 
-            "NOVAS_TAREFAS_SUGERIDAS:", "[Se houver, array JSON de strings aqui. Senão, omita ou use [].]"
+            "NOVAS_TAREFAS_SUGERIDAS:", "[Se houver, use um NOVO array JSON de strings aqui. Senão, omita ou use [].]"
         ]
         if self.task_manager.uploaded_file_objects: prompt.extend(self.task_manager.uploaded_file_objects)
         
         task_res_raw = call_gemini_api_with_retry(prompt, agent_display_name, model_name=self.model_name)
         if task_res_raw is None: return {"text_content": "Falha: Sem resposta da API.", "artifacts": []}, []
 
-        # Isolar e processar NOVAS_TAREFAS_SUGERIDAS primeiro
         sugg_tasks_strings = []
-        task_res_content_main = task_res_raw # Assume que a resposta inteira é conteúdo principal inicialmente
+        task_res_content_main = task_res_raw 
 
-        sugg_tasks_section_match = re.search(r"NOVAS_TAREFAS_SUGERIDAS:\s*([\s\S]*)", task_res_raw, re.IGNORECASE | re.DOTALL)
+        # Tenta encontrar a seção NOVAS_TAREFAS_SUGERIDAS e um array JSON dentro dela
+        sugg_tasks_section_match = re.search(r"NOVAS_TAREFAS_SUGERIDAS:\s*(\[.*?\])", task_res_raw, re.IGNORECASE | re.DOTALL)
+        
         if sugg_tasks_section_match:
-            sugg_tasks_potential_json = sugg_tasks_section_match.group(1).strip()
-            # Remove a seção de tarefas sugeridas do conteúdo principal
+            sugg_tasks_json_str = sugg_tasks_section_match.group(1).strip()
+            # Remove a seção de tarefas sugeridas (e o que vier depois dela) do conteúdo principal
             task_res_content_main = task_res_raw[:sugg_tasks_section_match.start()].strip()
-            log_message(f"Worker: String bruta para NOVAS_TAREFAS_SUGERIDAS: '{sugg_tasks_potential_json}'", agent_display_name)
+            log_message(f"Worker: String JSON bruta para NOVAS_TAREFAS_SUGERIDAS: '{sugg_tasks_json_str}'", agent_display_name)
 
-            # Tenta limpar ```json e ``` se estiverem envolvendo a string de tarefas
-            if sugg_tasks_potential_json.startswith("```json"):
-                sugg_tasks_potential_json = re.sub(r"^```json\s*|\s*```$", "", sugg_tasks_potential_json, flags=re.DOTALL).strip()
-            elif sugg_tasks_potential_json.startswith("```"):
-                 sugg_tasks_potential_json = re.sub(r"^```\s*|\s*```$", "", sugg_tasks_potential_json, flags=re.DOTALL).strip()
+            # Limpar ```json e ``` se estiverem envolvendo a string de tarefas
+            if sugg_tasks_json_str.startswith("```json"):
+                sugg_tasks_json_str = re.sub(r"^```json\s*|\s*```$", "", sugg_tasks_json_str, flags=re.DOTALL).strip()
+            elif sugg_tasks_json_str.startswith("```"): # Caso genérico de bloco de código
+                 sugg_tasks_json_str = re.sub(r"^```\s*|\s*```$", "", sugg_tasks_json_str, flags=re.DOTALL).strip()
             
-            log_message(f"Worker: String limpa para NOVAS_TAREFAS_SUGERIDAS: '{sugg_tasks_potential_json}'", agent_display_name)
+            log_message(f"Worker: String JSON limpa para NOVAS_TAREFAS_SUGERIDAS: '{sugg_tasks_json_str}'", agent_display_name)
 
-            # Verifica se é um placeholder ou vazio
-            placeholders = ["[array json...]", "[array json de strings aqui, apenas se necessário. se não, omita esta seção.]", "[]", "null", "none", "omita esta seção."]
-            if sugg_tasks_potential_json and sugg_tasks_potential_json.lower() not in [p.lower() for p in placeholders]:
+            placeholders = ["[array json...]", "[array json de strings aqui, apenas se necessário. se não, omita esta seção.]", "[]", "null", "none", "omita esta seção."] # Adicionado "[]" como placeholder
+            if sugg_tasks_json_str and sugg_tasks_json_str.lower() not in [p.lower() for p in placeholders]:
                 try: 
-                    parsed_json = json.loads(sugg_tasks_potential_json)
+                    parsed_json = json.loads(sugg_tasks_json_str)
                     if isinstance(parsed_json, list) and all(isinstance(s, str) for s in parsed_json):
-                        sugg_tasks_strings = [s.strip().strip('"').strip("'") for s in parsed_json if s.strip()] # Limpa aspas extras
+                        sugg_tasks_strings = [s.strip().strip('"').strip("'") for s in parsed_json if s.strip()]
                         log_message(f"Worker: Tarefas novas sugeridas (JSON válido): {sugg_tasks_strings}", agent_display_name)
-                    elif isinstance(parsed_json, list):
+                    elif isinstance(parsed_json, list): # Lista, mas não de strings
                         sugg_tasks_strings = [str(item).strip().strip('"').strip("'") for item in parsed_json if isinstance(item, str) and str(item).strip()]
                         if sugg_tasks_strings:
                              log_message(f"Worker: Tarefas novas sugeridas (convertidas de lista mista): {sugg_tasks_strings}", agent_display_name)
                         else:
                              log_message(f"Worker: NOVAS_TAREFAS_SUGERIDAS era lista, mas não de strings válidas: {parsed_json}", agent_display_name)
-                    else:
-                        log_message(f"Worker: NOVAS_TAREFAS_SUGERIDAS não é uma lista JSON válida: '{sugg_tasks_potential_json}'", agent_display_name)
+                    else: # Não é uma lista
+                        log_message(f"Worker: NOVAS_TAREFAS_SUGERIDAS não é uma lista JSON válida: '{sugg_tasks_json_str}'", agent_display_name)
                 except json.JSONDecodeError as e: 
-                    log_message(f"Worker: Erro ao decodificar JSON de NOVAS_TAREFAS_SUGERIDAS: {e}. String: '{sugg_tasks_potential_json}'. Tentando extração linha por linha.", agent_display_name)
-                    potential_tasks = [line.strip().lstrip("-* ").rstrip(".,").strip('"').strip("'") for line in sugg_tasks_potential_json.splitlines() if line.strip() and len(line.strip()) > 5 and not line.strip().startswith("```")]
+                    log_message(f"Worker: Erro ao decodificar JSON de NOVAS_TAREFAS_SUGERIDAS: {e}. String: '{sugg_tasks_json_str}'. Tentando extração linha por linha APENAS da seção de tarefas.", agent_display_name)
+                    # Fallback: Tentar extrair linhas como tarefas SOMENTE da string `sugg_tasks_json_str`
+                    potential_tasks = [line.strip().lstrip("-* ").rstrip(".,").strip('"').strip("'") for line in sugg_tasks_json_str.splitlines() if line.strip() and len(line.strip()) > 5 and not line.strip().startswith("```") and not line.strip().lower().startswith("arquivo:")]
                     if potential_tasks:
-                        sugg_tasks_strings = [task for task in potential_tasks if task] # Remove vazias
-                        log_message(f"Worker: Tarefas novas sugeridas (extração linha por linha): {sugg_tasks_strings}", agent_display_name)
+                        sugg_tasks_strings = [task for task in potential_tasks if task] 
+                        log_message(f"Worker: Tarefas novas sugeridas (extração linha por linha da seção de tarefas): {sugg_tasks_strings}", agent_display_name)
                     else:
-                        log_message(f"Worker: Extração linha por linha de NOVAS_TAREFAS_SUGERIDAS não produziu resultados.", agent_display_name)
-            else:
-                 log_message(f"Worker: NOVAS_TAREFAS_SUGERIDAS era placeholder ou vazio ('{sugg_tasks_potential_json}').", agent_display_name)
-        else:
-            log_message("Worker: Nenhuma seção 'NOVAS_TAREFAS_SUGERIDAS:' encontrada na resposta.", agent_display_name)
+                        log_message(f"Worker: Extração linha por linha de NOVAS_TAREFAS_SUGERIDAS não produziu resultados da seção isolada.", agent_display_name)
+            else: # Era placeholder ou string vazia
+                 log_message(f"Worker: NOVAS_TAREFAS_SUGERIDAS era placeholder ou vazio ('{sugg_tasks_json_str}'). Nenhuma tarefa adicionada.", agent_display_name)
+        else: # Nenhuma seção NOVAS_TAREFAS_SUGERIDAS encontrada
+            log_message("Worker: Nenhuma seção 'NOVAS_TAREFAS_SUGERIDAS:' encontrada na resposta. `task_res_content_main` permanece como `task_res_raw`.", agent_display_name)
+            task_res_content_main = task_res_raw # Garante que todo o conteúdo seja usado para artefatos se não houver seção de tarefas
         
         extracted_artifacts = self._extract_artifacts_from_output(task_res_content_main) 
         
         main_text_output = task_res_content_main
-        # Se a extração de artefatos JSON foi bem-sucedida e retornou uma chave "resultado", usamos ela.
-        # Isso evita que o JSON inteiro dos artefatos seja o text_content.
         if extracted_artifacts and any(art.get("extraction_method") == "json" for art in extracted_artifacts):
             try:
-                # Tenta parsear o conteúdo principal novamente, caso ele seja o JSON que continha os artefatos
                 json_data_main = json.loads(task_res_content_main.strip().lstrip("```json").rstrip("```").strip())
                 if isinstance(json_data_main, dict) and "resultado" in json_data_main:
                     main_text_output = json_data_main["resultado"]
-                # Se não tem "resultado", mas é um JSON de artefatos, o texto principal pode ser só uma mensagem genérica.
                 elif isinstance(json_data_main, dict) and "arquivos" in json_data_main:
                      main_text_output = "Artefatos processados a partir de JSON." if not main_text_output.strip() else main_text_output
-
             except json.JSONDecodeError:
-                # Não era JSON, task_res_content_main já é o texto principal (sem a seção de tarefas sugeridas)
                 pass
         
         log_message(f"Resultado da sub-tarefa '{sub_task_description}' (texto principal): {str(main_text_output)[:500]}...", agent_display_name)
         return {"text_content": main_text_output, "artifacts": extracted_artifacts}, sugg_tasks_strings
 
-    def _extract_artifacts_from_output(self, output_str): # Mantido da v9.3
+    def _extract_artifacts_from_output(self, output_str):
         artifacts = []
         try: 
             cleaned_output = output_str.strip()
             if cleaned_output.startswith("```json"): cleaned_output = re.sub(r"^```json\s*|\s*```$", "", cleaned_output, flags=re.DOTALL).strip()
             
-            # Verifica se a string é um JSON válido antes de tentar carregar
             if not (cleaned_output.startswith('{') and cleaned_output.endswith('}')) and not (cleaned_output.startswith('[') and cleaned_output.endswith(']')):
-                raise json.JSONDecodeError("String não parece ser JSON válido", cleaned_output, 0)
-
-            data = json.loads(cleaned_output)
-            if isinstance(data, dict) and "arquivos" in data and isinstance(data["arquivos"], list):
-                log_message("Extraindo artefatos via estrutura JSON 'arquivos'.", "Worker")
-                for item in data["arquivos"]:
-                    if isinstance(item, dict) and "nome" in item and "conteudo" in item:
-                        fn = sanitize_filename(item["nome"]); cont = item["conteudo"]; lang = item.get("linguagem","").lower() or (fn.split('.')[-1] if '.' in fn else "")
-                        if fn and cont and cont.strip(): # Adicionado cont.strip()
-                            artifacts.append({"type": "markdown" if lang=="markdown" or fn.endswith(".md") else "code", "filename": fn, "content": cont, "language": lang, "extraction_method": "json"})
-                if artifacts: log_message(f"{len(artifacts)} artefatos extraídos via JSON.", "Worker"); return artifacts
+                # Se não parece JSON, não tenta carregar para evitar erros desnecessários no log se for markdown puro.
+                if "arquivo:" not in cleaned_output.lower() and "```" not in cleaned_output: # Heurística para não logar markdown puro como falha JSON
+                    pass # Não loga como erro de JSON se for provável que seja markdown
+                else: # Se tem "arquivo:" ou "```", pode ser uma tentativa de JSON malformado
+                    log_message(f"String não parece JSON válido para artefatos: '{cleaned_output[:100]}...'", "Worker._extract_artifacts")
+                    # Não levanta erro aqui, deixa o regex tentar
+            else: # Parece JSON, tenta carregar
+                data = json.loads(cleaned_output)
+                if isinstance(data, dict) and "arquivos" in data and isinstance(data["arquivos"], list):
+                    log_message("Extraindo artefatos via estrutura JSON 'arquivos'.", "Worker")
+                    for item in data["arquivos"]:
+                        if isinstance(item, dict) and "nome" in item and "conteudo" in item:
+                            fn = sanitize_filename(item["nome"]); cont = item["conteudo"]; lang = item.get("linguagem","").lower() or (fn.split('.')[-1] if '.' in fn else "")
+                            if fn and cont and cont.strip(): 
+                                artifacts.append({"type": "markdown" if lang=="markdown" or fn.endswith(".md") else "code", "filename": fn, "content": cont, "language": lang, "extraction_method": "json"})
+                    if artifacts: log_message(f"{len(artifacts)} artefatos extraídos via JSON.", "Worker"); return artifacts
         except json.JSONDecodeError as e: 
             log_message(f"Saída não é JSON de artefatos ('{str(e)}'). Tentando regex. String: '{output_str[:200]}...'", "Worker")
         except Exception as e_json_gen:
              log_message(f"Erro inesperado no parse JSON de artefatos: {e_json_gen}. String: '{output_str[:200]}...'", "Worker")
-
 
         patterns = [
             re.compile(r"Arquivo:\s*(?P<filename>[^\n`]+)\s*\n```(?P<language>[a-zA-Z0-9_+\-#.]*)\s*\n(?P<content>.*?)\n```", re.DOTALL | re.MULTILINE),
@@ -352,7 +351,6 @@ class Worker:
                 if match.start() in processed_starts: continue
                 filename_match = match.groupdict().get("filename"); content_match = match.groupdict().get("content"); language_match = match.groupdict().get("language","").lower()
                 
-                # Para o segundo padrão (fallback), só processar se houver nome de arquivo explícito na linha do ```
                 if i == 1 and not filename_match: continue
 
                 filename = sanitize_filename(filename_match.strip()) if filename_match else ""
@@ -419,7 +417,7 @@ class Validator: # Mantido da v9.3
         log_message(f"Validação automática OK para: {list(staged_artifacts.keys())}", "Validator")
         return {"status": "success"}
 
-class TaskManager: # Adaptado para v9.3.1
+class TaskManager: # Adaptado para v9.3.2
     def __init__(self, initial_goal, uploaded_file_objects=None, uploaded_files_info=None):
         self.goal = initial_goal
         self.uploaded_file_objects = uploaded_file_objects or []
@@ -431,7 +429,7 @@ class TaskManager: # Adaptado para v9.3.1
         self.image_worker = ImageWorker(self) 
         self.validator = Validator(self)
         self.gemini_text_model_name = GEMINI_TEXT_MODEL_NAME
-        log_message("Instância do TaskManager (v9.3.1) criada.", "TaskManager")
+        log_message("Instância do TaskManager (v9.3.2) criada.", "TaskManager")
 
     def confirm_new_tasks_with_llm(self, original_goal, current_task_list_for_prompt, suggested_new_tasks):
         agent_name = "Task Manager (Confirm New Tasks)"
@@ -439,7 +437,6 @@ class TaskManager: # Adaptado para v9.3.1
             log_message("Nenhuma nova tarefa sugerida para confirmar.", agent_name)
             return []
         
-        # Limpar as tarefas sugeridas de possíveis aspas extras
         cleaned_suggested_tasks = [task.strip().strip('"').strip("'") for task in suggested_new_tasks if isinstance(task, str) and task.strip()]
         if not cleaned_suggested_tasks:
             log_message("Tarefas sugeridas estavam vazias ou não eram strings após limpeza.", agent_name)
@@ -473,7 +470,7 @@ class TaskManager: # Adaptado para v9.3.1
                     log_message(f"JSON extraído para aprovação: '{json_payload_str}'", agent_name)
                     parsed_response = json.loads(json_payload_str)
                     if isinstance(parsed_response, list) and all(isinstance(task, str) for task in parsed_response):
-                        approved_tasks = [task.strip().strip('"').strip("'") for task in parsed_response if task.strip()] # Limpa novamente
+                        approved_tasks = [task.strip().strip('"').strip("'") for task in parsed_response if task.strip()] 
                         log_message(f"Novas tarefas aprovadas pela LLM: {approved_tasks}", agent_name)
                     else:
                         log_message(f"Resposta da LLM para aprovação não é uma lista de strings: {parsed_response}", agent_name)
@@ -655,27 +652,23 @@ class TaskManager: # Adaptado para v9.3.1
 
                 if suggested_new_tasks_from_worker:
                     log_message(f"Worker sugeriu novas tarefas: {suggested_new_tasks_from_worker}", "TaskManager")
-                    # Passar uma cópia da lista de tarefas atual para evitar modificação durante iteração
-                    # E também as tarefas já executadas para dar mais contexto à LLM de confirmação
-                    contextual_task_list_for_confirmation = list(self.current_task_list[:current_task_index]) # Tarefas já executadas + a atual
+                    contextual_task_list_for_confirmation = list(self.current_task_list[:current_task_index+1]) # Inclui a tarefa atual que gerou as sugestões
                     
                     approved_new_tasks = self.confirm_new_tasks_with_llm(
                         self.goal, 
-                        contextual_task_list_for_confirmation, # Envia contexto mais preciso
+                        contextual_task_list_for_confirmation,
                         suggested_new_tasks_from_worker
                     )
                     if approved_new_tasks:
                         log_message(f"Novas tarefas aprovadas pela LLM e adicionadas ao plano: {approved_new_tasks}", "TaskManager")
                         # Adiciona as novas tarefas na posição correta (após a tarefa atual)
-                        # e ajusta o current_task_index se necessário, embora o while já cuide disso.
-                        self.current_task_list = self.current_task_list[:current_task_index] + approved_new_tasks + self.current_task_list[current_task_index:]
+                        self.current_task_list = self.current_task_list[:current_task_index+1] + approved_new_tasks + self.current_task_list[current_task_index+1:]
                         print_agent_message("TaskManager", f"Novas tarefas aprovadas adicionadas ao plano: {approved_new_tasks}")
                         log_message(f"Plano de tarefas atualizado: {self.current_task_list}", "TaskManager")
-
                     else:
                         log_message("Nenhuma das tarefas sugeridas foi aprovada pela LLM.", "TaskManager")
                 
-                current_task_index += 1 # Avança para a próxima tarefa original ou a recém-adicionada
+                current_task_index += 1 
             
             automatic_validation_result = self.validator.validate_results(self.executed_tasks_results, self.staged_artifacts, self.goal)
             last_automatic_validation_feedback = automatic_validation_result 
@@ -718,7 +711,7 @@ class TaskManager: # Adaptado para v9.3.1
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v9.3.2" 
+    SCRIPT_VERSION = "v9.3.2b" # ATUALIZADO
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas Finais: {OUTPUT_DIRECTORY}\n⏳ Artefatos Temporários: {TEMP_ARTIFACTS_DIR}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
