@@ -1,4 +1,4 @@
-MAG: Sistema Multiagente Gemini (v8.0)
+MAG: Sistema Multiagente Gemini (v10.0) - Versão Beta com Router
 
 Descrição
 MAG (Multi-Agent Gemini) é um sistema baseado em Python que utiliza os Modelos de Linguagem Grandes (LLMs) Gemini do Google para automatizar tarefas complexas através de uma arquitetura multiagente. Ele emprega um Agente Gerenciador de Tarefas (TaskManager) para decompor objetivos de alto nível do usuário em subtarefas gerenciáveis, que são então executadas por Agentes Trabalhadores (Worker) especializados, incluindo um ImageWorker para geração de imagens. O sistema suporta a geração dinâmica de tarefas, upload de arquivos para fornecer contexto e um sistema robusto de logs.
