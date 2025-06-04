@@ -205,7 +205,7 @@ def get_uploaded_files_info_from_user():
                 dn = os.path.basename(fp)
                 try:
                     print_agent_message("Sistema", f"Fazendo upload de '{dn}'...")
-                    ext_map = { ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src", ".h": "text/x-chdr", ".hpp": "text/x-c++hdr", ".txt": "text/plain", ".json": "text/plain",
+                    ext_map = { ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src", ".h": "text/x-chdr", ".hpp": "text/x-c++hdr", ".txt": "text/plain", ".json": "text/plain", ".gradle": "text/plain",
                                 ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif" } # Adicionado tipos de imagem
                     mime = ext_map.get(os.path.splitext(dn)[1].lower())
                     file_obj = genai.upload_file(path=fp, display_name=dn, mime_type=mime)
@@ -235,10 +235,10 @@ class Worker:
             f"Contexto (resultados anteriores, objetivo original, arquivos):\n{prompt_context}\n{files_prompt_part}",
             f"Objetivo: {original_goal}", "Execute a tarefa.",
             " * Se for \"Criar uma descrição textual detalhada (prompt) para gerar a imagem de [...]\", seu resultado DEVE ser APENAS essa descrição textual.",
-            " * Se a tarefa envolver modificar ou criar arquivos de código ou markdown, forneça o CONTEÚDO COMPLETO do arquivo.",
+            " * Se a tarefa envolver modificar ou criar arquivos de código ou markdown, forneça TODO O CONTEÚDO COMPLETO do arquivo.",
             " * Indique o NOME DO ARQUIVO CLARAMENTE ANTES de cada bloco de código/markdown usando o formato:\n   \"Arquivo: nome_completo.ext\"\n   ```linguagem_ou_extensao\n   // Conteúdo completo...\n   ```",
             " * Para arquivos Markdown, use `markdown` como linguagem.",
-            " * Se precisar retornar múltiplos arquivos, repita o formato ou use JSON: {\"resultado\": \"descrição\", \"arquivos\": [{\"nome\": \"f1.cpp\", \"conteudo\": \"...\"}]}",
+            " * Se precisar retornar múltiplos arquivos, repita o formato ou use JSON: {\"resultado\": \"descrição\", \"arquivos\": [{\"nome\": \"f1.cpp\", \"conteudo completo\": \"...\"}]}",
             " * Se identificar NOVAS sub-tarefas cruciais, liste-as APÓS todo o conteúdo principal e artefatos, na seção 'NOVAS_TAREFAS_SUGERIDAS:' como um novo array JSON de strings válidas. Se não houver sugestões, omita completamente a seção 'NOVAS_TAREFAS_SUGERIDAS:' ou retorne um array JSON vazio []. Não retorne placeholders como '[Array JSON...]'.",
             "Resultado da Tarefa:", "[Resultado principal...]", 
             "NOVAS_TAREFAS_SUGERIDAS:", "[Se houver, use um NOVO array JSON de strings aqui. Senão, omita ou use [].]"
