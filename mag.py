@@ -417,7 +417,8 @@ def get_uploaded_files_info_from_user():
                             ".webp": "image/webp", ".mp3": "audio/mpeg", ".wav": "audio/wav",
                             ".ogg": "audio/ogg", ".mp4": "video/mp4", ".webm": "video/webm",
                             ".avi": "video/x-msvideo", ".mov": "video/quicktime",
-                            ".gradle": "text/plain", "cmakelists.txt": "text/plain", "dockerfile": "text/plain"
+                            ".gradle": "text/plain", "cmakelists.txt": "text/plain", "dockerfile": "text/plain",
+                            ".lua": "text/plain"
                         }
                         file_ext = os.path.splitext(dn)[1].lower()
                         if dn.lower() in ext_map:
