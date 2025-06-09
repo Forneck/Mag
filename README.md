@@ -1,96 +1,112 @@
-MAG: Sistema Multiagente Gemini (v9.3.3)
+# MAG: Sistema Multiagente Gemini (v9.4)
 
-Descrição
-MAG (Multi-Agent Gemini) é um sistema baseado em Python que utiliza os Modelos de Linguagem Grandes (LLMs) Gemini do Google para automatizar tarefas complexas através de uma arquitetura multiagente. Ele emprega um Agente Gerenciador de Tarefas (TaskManager) para decompor objetivos de alto nível do usuário em subtarefas gerenciáveis, que são então executadas por Agentes Trabalhadores (Worker) especializados, incluindo um ImageWorker para geração de imagens. O sistema suporta a geração dinâmica de tarefas, upload de arquivos para fornecer contexto e um sistema robusto de logs.
+## Descrição
 
-Funcionalidades
- * Decomposição de Tarefas: Um agente TaskManager divide metas complexas do usuário em uma lista sequencial de subtarefas usando o Gemini.
- * Agentes Trabalhadores Especializados:
-   * Worker: Executa subtarefas gerais baseadas em texto.
-   * ImageWorker: Dedicado a gerar imagens com base em descrições textuais, utilizando as capacidades de geração de imagem do Gemini.
- * Gerenciamento Dinâmico de Tarefas: O Worker pode sugerir novas tarefas durante a execução, que o TaskManager valida e integra ao fluxo de trabalho.
- * Upload de Arquivos e Contexto: Suporta o upload de arquivos locais para fornecer contexto adicional aos modelos Gemini.
- * Interação com API com Retentativas: Comunicação robusta com a API Gemini, incluindo backoff exponencial para retentativas.
- * Logs Abrangentes: Registro detalhado de todas as operações, mensagens dos agentes e chamadas de API para rastreabilidade e depuração.
- * Saída Estruturada: Gera um produto final (texto ou imagem) e um relatório de avaliação detalhado.
- * Aprovação do Usuário: Inclui uma etapa para aprovação do usuário do plano de tarefas inicial.
- * Avaliação de Conceitos de Imagem: Para tarefas envolvendo múltiplas gerações de imagem, uma etapa de avaliação baseada em LLM seleciona o conceito de imagem mais promissor.
+MAG (Multi-Agent Gemini) é um sistema baseado em Python que utiliza os Modelos de Linguagem Grandes (LLMs) Gemini do Google para automatizar tarefas complexas através de uma arquitetura multiagente. Ele emprega um Agente Gerenciador de Tarefas (**TaskManager**) para decompor objetivos de alto nível em subtarefas gerenciáveis. Essas tarefas são executadas por Agentes Trabalhadores (**Worker**) especializados e, em seguida, avaliadas por um Agente Validador (**Validator**) que gerencia a qualidade e o ciclo de feedback com o usuário antes de salvar os artefatos finais.
 
-Arquitetura
-O sistema é construído sobre um padrão Gerenciador de Tarefas/Trabalhador (Task Manager/Worker):
- * TaskManager: Atua como o orquestrador central. Ele interpreta o objetivo principal do usuário, o divide em um plano (lista de subtarefas), delega essas subtarefas aos agentes trabalhadores apropriados, gerencia o fluxo de informações e contexto, e valida a saída final.
- * Worker: Um agente de propósito geral responsável por executar subtarefas baseadas em texto atribuídas pelo TaskManager. Ele também pode sugerir novas tarefas se identificar uma necessidade durante a execução.
- * ImageWorker: Um agente especializado focado unicamente na geração de imagens com base em prompts fornecidos através do fluxo de trabalho da tarefa.
+## Funcionalidades
 
-Componentes/Classes Chave
- * TaskManager:
-   * decompose_task(): Decompõe a meta principal em subtarefas.
-   * run_workflow(): Gerencia o fluxo de execução geral das tarefas.
-   * confirm_new_tasks_with_llm(): Valida novas tarefas sugeridas pelo Worker.
-   * evaluate_and_select_image_concept(): Seleciona o melhor prompt/resultado de imagem quando múltiplas imagens estão envolvidas.
-   * validate_and_save_final_output(): Realiza a validação final e salva o resultado.
- * Worker:
-   * execute_sub_task(): Executa uma subtarefa fornecida e pode sugerir novas tarefas.
- * ImageWorker:
-   * generate_image(): Gera uma imagem com base em um prompt textual.
+* **Decomposição de Tarefas**: O **TaskManager** divide metas complexas em uma lista sequencial de subtarefas usando o Gemini.
+* **Agentes Especializados**:
+    * **Worker**: Executa subtarefas gerais baseadas em texto e código.
+    * **ImageWorker**: Dedicado a gerar imagens, salvando-as em um diretório temporário para avaliação.
+    * **Validator**: Agente de qualidade que avalia os artefatos gerados (texto, código e imagens), gerencia o ciclo de feedback com o usuário e consolida a saída final.
+* **Gerenciamento Dinâmico de Tarefas**: O Worker pode sugerir novas tarefas durante a execução, que o TaskManager valida e integra ao fluxo de trabalho.
+* **Upload de Arquivos e Contexto**: Suporta o upload de arquivos locais (com wildcards, ex: `*.txt`) para fornecer contexto adicional aos modelos Gemini.
+* **Gerenciamento de Cache**: Permite ao usuário visualizar e, opcionalmente, limpar o cache de uploads local e os arquivos na API Gemini antes de iniciar uma nova sessão.
+* **Ciclo de Validação e Feedback Robusto**:
+    * Ao final do fluxo de tarefas, o Validator avalia o resultado.
+    * O usuário recebe um menu claro (`[A]provar`, `[F]eedback`, `[S]air`) para aprovar os artefatos, fornecer feedback para uma nova iteração ou encerrar o processo, evitando loops indesejados.
+* **Logs Abrangentes**: Registro detalhado de todas as operações, mensagens dos agentes e chamadas de API para rastreabilidade e depuração.
+* **Gerenciamento de Artefatos**: Utiliza um diretório temporário para os artefatos gerados, que são movidos para a pasta de saída final apenas após a aprovação.
 
-Como Funciona (Fluxo de Trabalho)
- * Entrada do Usuário: O usuário fornece uma meta principal e, opcionalmente, faz upload de arquivos complementares.
- * Decomposição da Tarefa: O TaskManager usa o Gemini para decompor a meta principal em uma lista de subtarefas.
- * Aprovação do Usuário: O plano de tarefas inicial é apresentado ao usuário para aprovação.
- * Loop de Execução de Tarefas:
-   * O TaskManager itera pela lista de tarefas.
-   * Para tarefas gerais, ele delega ao Worker.
-   * Para tarefas de geração de imagem (TASK_GERAR_IMAGEM:), ele usa o ImageWorker. O prompt para geração de imagem é tipicamente o resultado de uma tarefa anterior.
-   * Para tarefas de avaliação de imagem (TASK_AVALIAR_IMAGENS:), o TaskManager usa o Gemini para selecionar o melhor conceito de imagem com base em descrições textuais das tentativas.
-   * O Worker pode sugerir novas tarefas. Estas são validadas pelo TaskManager (usando o Gemini) e, se aprovadas, inseridas na lista de tarefas.
-   * Os resultados de cada tarefa são armazenados e podem ser usados como contexto para tarefas subsequentes.
- * Validação Final e Saída: Uma vez que todas as tarefas são concluídas, o TaskManager usa o Gemini para realizar uma validação final do resultado geral. Ele então salva o produto final (por exemplo, arquivo de texto, script Python, imagem) e um log de avaliação detalhado.
+## Arquitetura
 
-Configuração/Pré-requisitos
- * Python 3.x
- * Chave da API Google Gemini
- * Pacotes Python necessários:bash
-   pip install google-generativeai
-   *(O script usa `os`, `json`, `time`, `datetime`, `re`, `traceback`, `base64` que são bibliotecas padrão do Python.)*
+O sistema é construído sobre um padrão Gerenciador/Trabalhador/Validador:
 
-Variáveis de Ambiente
- * Defina a variável de ambiente GEMINI_API_KEY com sua chave da API Google Gemini:
-   export GEMINI_API_KEY="SUA_CHAVE_API"
+* **TaskManager**: Atua como o orquestrador central. Ele interpreta o objetivo, o divide em um plano, delega as subtarefas, gerencia o fluxo de informações e orquestra o ciclo de validação e feedback.
+* **Worker**: Agente de propósito geral responsável por executar subtarefas baseadas em texto e código.
+* **ImageWorker**: Agente especializado focado em gerar imagens com base em prompts e salvar os resultados temporariamente.
+* **Validator**: Agente de "Quality Assurance". Ele avalia os conceitos de imagem gerados e realiza a validação final de todos os artefatos, interagindo com o usuário para aprovação ou iteração.
 
-   Ou configure-a nas configurações de variáveis de ambiente do seu sistema.
-Uso
- * Certifique-se de que você tem o Python instalado e a variável de ambiente GEMINI_API_KEY configurada.
- * Salve o script como mag.py.
- * Execute o script a partir do seu terminal:
-   python mag.py
+## Componentes/Classes Chave
 
- * O script irá solicitar que você:
-   * Defina a meta principal.
-   * Opcionalmente, adicione arquivos complementares (forneça os caminhos locais um por um, digite 'fim' para terminar).
-   * Aprove o plano de tarefas inicial gerado pelo TaskManager.
+* **TaskManager**:
+    * `run_workflow()`: Gerencia o fluxo de execução geral, incluindo o novo ciclo de validação e feedback.
+    * `decompose_task()`: Decompõe a meta principal.
+    * `confirm_new_tasks_with_llm()`: Valida novas tarefas sugeridas.
+* **Worker**:
+    * `execute_sub_task()`: Executa uma subtarefa e pode sugerir novas.
+* **ImageWorker**:
+    * `generate_image()`: Gera uma imagem e a salva em um diretório temporário, retornando o caminho do arquivo.
+* **Validator**:
+    * `evaluate_and_select_image_concepts()`: Seleciona os prompts de imagem mais promissores para aprovação.
+    * `validate_and_save_final_output()`: Realiza a validação final, gera o relatório e, após a aprovação, move os artefatos para a pasta de saída final.
+* **Funções de Apoio**:
+    * `clear_upload_cache()`: Permite a limpeza do cache local e da API.
+    * `get_user_feedback_or_approval()`: Garante uma captura de entrada robusta do usuário para o ciclo de feedback.
 
-Configuração
-Vários parâmetros podem ser configurados diretamente no início do script mag.py:
- * BASE_DIRECTORY, LOG_DIRECTORY, OUTPUT_DIRECTORY, UPLOADED_FILES_CACHE_DIR: Caminhos para armazenar logs, saídas e informações de arquivos carregados em cache.
- * MAX_API_RETRIES, INITIAL_RETRY_DELAY_SECONDS, RETRY_BACKOFF_FACTOR: Parâmetros para retentativas de chamadas de API.
- * GEMINI_TEXT_MODEL_NAME: Modelo usado para geração de texto e lógica (ex: gemini-2.0-flash).
- * GEMINI_IMAGE_GENERATION_MODEL_NAME: Modelo usado para geração de imagens (ex: gemini-2.0-flash-preview-image-generation).
- * generation_config_text, generation_config_image: Configurações de temperatura, top_p, top_k, etc., para os modelos de texto e imagem.
- * safety_settings_gemini: Configurações de segurança para chamadas à API Gemini.
+## Como Funciona (Fluxo de Trabalho)
 
-Estrutura de Arquivos (Saídas)
-Quando o script é executado, ele cria os seguintes diretórios (se não existirem) no mesmo local do script:
- * gemini_agent_logs/: Contém arquivos de log detalhados para cada execução (ex: agent_log_YYYYMMDD_HHMMSS.txt).
- * gemini_final_outputs/:
-   * Armazena o produto final gerado pelo fluxo de trabalho (ex: produto_text_geral_minha-meta_YYYYMMDD_HHMMSS.txt, produto_imagem_png_base64_minha-meta-de-imagem_YYYYMMDD_HHMMSS.png).
-   * Armazena um arquivo de avaliação abrangente para cada execução (ex: avaliacao_completa_minha-meta_YYYYMMDD_HHMMSS.txt).
- * gemini_uploaded_files_cache/: Armazena arquivos JSON com metadados sobre os arquivos carregados pelo usuário durante uma sessão (ex: uploaded_files_info_YYYYMMDD_HHMMSS.json).
-Logs
- * Todos os eventos significativos, mensagens dos agentes, chamadas de API e erros são registrados em um arquivo com timestamp no diretório gemini_agent_logs.
- * A saída do console também fornece atualizações em tempo real sobre o progresso do agente.
-Contribuições
+1.  **Limpeza de Cache (Opcional)**: O usuário decide se quer limpar os caches locais e da API.
+2.  **Entrada do Usuário**: O usuário fornece uma meta principal e, opcionalmente, faz upload de arquivos.
+3.  **Decomposição e Aprovação**: O TaskManager cria um plano de tarefas, que o usuário aprova.
+4.  **Loop de Execução de Tarefas**:
+    * O TaskManager itera pela lista, delegando tarefas aos Workers apropriados.
+    * O `ImageWorker` gera imagens e as salva em `gemini_temp_artifacts/`.
+    * Resultados e artefatos são coletados.
+5.  **Ciclo de Validação e Feedback**:
+    * Ao final do ciclo de tarefas, o **Validator** avalia todos os artefatos gerados.
+    * Se a validação falhar, o usuário é apresentado com o menu: `[A]provar`, `[F]eedback`, `[S]air`.
+    * **Feedback**: Se o usuário fornecer feedback, uma nova tarefa de correção é adicionada à lista, e o loop de execução recomeça.
+    * **Aprovar/Sair**: Se o usuário aprovar ou se a validação inicial for bem-sucedida, o Validator move os artefatos aprovados do diretório temporário para a pasta de saída final (`gemini_final_outputs/`) e o processo é concluído.
+
+## Configuração/Pré-requisitos
+
+* Python 3.x
+* Chave da API Google Gemini
+* Pacotes Python necessários:
+    ```bash
+    pip install google-generativeai
+    ```
+    *(O script usa bibliotecas padrão como `os`, `json`, `shutil`, etc.)*
+
+## Variáveis de Ambiente
+
+* Defina a variável de ambiente `GEMINI_API_KEY` com sua chave da API:
+    ```bash
+    export GEMINI_API_KEY="SUA_CHAVE_API"
+    ```
+
+## Uso
+
+1.  Certifique-se de que você tem o Python instalado e a variável de ambiente `GEMINI_API_KEY` configurada.
+2.  Salve o script como `mag.py`.
+3.  Execute o script a partir do seu terminal: `python mag.py`
+4.  O script irá guiá-lo através das etapas: limpeza de cache (opcional), definição da meta, upload de arquivos e aprovação do plano.
+
+## Configuração
+
+Vários parâmetros podem ser configurados diretamente no início do script `mag.py`:
+
+* **Diretórios**: `LOG_DIRECTORY`, `OUTPUT_DIRECTORY`, `UPLOADED_FILES_CACHE_DIR`, `TEMP_ARTIFACTS_DIR`.
+* **Retentativas**: `MAX_API_RETRIES`, `MAX_AUTOMATIC_VALIDATION_RETRIES`, `MAX_MANUAL_VALIDATION_RETRIES`.
+* **Modelos**: `GEMINI_TEXT_MODEL_NAME`, `GEMINI_IMAGE_GENERATION_MODEL_NAME`.
+* **Configurações de Geração**: `generation_config_text`, `generation_config_image_sdk`.
+
+## Estrutura de Arquivos (Saídas)
+
+* `gemini_agent_logs/`: Contém logs detalhados de cada execução.
+* `gemini_uploaded_files_cache/`: Armazena metadados de arquivos carregados.
+* `gemini_temp_artifacts/`: **(Novo)** Armazena temporariamente os artefatos gerados durante a execução (imagens, código). É limpo no início e no fim.
+* `gemini_final_outputs/`:
+    * Contém subdiretórios com timestamp para cada execução bem-sucedida.
+    * Dentro de cada subdiretório, armazena os **artefatos finais aprovados** e o **relatório de avaliação** em Markdown.
+
+## Contribuições
+
 Contribuições são bem-vindas! Sinta-se à vontade para enviar um Pull Request ou abrir uma Issue.
 
-Licença
+## Licença
+
 Este projeto está licenciado sob a Licença MIT.
