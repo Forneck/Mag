@@ -106,7 +106,7 @@ def call_gemini_api_with_retry(prompt_parts, agent_name, model_name, gen_config=
             if hasattr(response, 'text') and response.text is not None:
                  return response.text.strip()
 
-            if response.candidates and response.candidates[0].content.parts:
+            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 return response.candidates[0].content.parts[0].text.strip()
 
             return None
@@ -161,7 +161,6 @@ def clear_upload_cache():
         print_agent_message("Sistema", f"❌ Erro ao limpar arquivos da API: {e}")
 
 def get_uploaded_files_info_from_user():
-    # ... (código idêntico à v9.4.1) ...
     uploaded_file_objects = []
     uploaded_files_metadata = []
     reused_file_ids = set()
@@ -175,7 +174,7 @@ def get_uploaded_files_info_from_user():
     api_files_dict = {f.name: f for f in api_files_list}
     cached_metadata = load_cached_files_metadata(get_most_recent_cache_file())
     
-    offer_for_reuse = [{**f._pb, "user_path": next((c.get("user_path") for c in cached_metadata if c.get("file_id") == f.name), "N/A")} for f in api_files_list]
+    offer_for_reuse = [{**f.to_dict(), "user_path": next((c.get("user_path") for c in cached_metadata if c.get("file_id") == f.name), "N/A")} for f in api_files_list]
 
     if offer_for_reuse:
         print_agent_message("Sistema", "Arquivos na API para reutilizar:")
@@ -184,7 +183,29 @@ def get_uploaded_files_info_from_user():
         if input("➡️ ").strip().lower() == 's':
             print_user_message("Digite os números (ex: 1,3) ou 'todos':")
             choices = input("➡️ ").strip().lower()
-            # ... (Lógica de seleção de arquivos aqui) ...
+            
+            indices_to_try = []
+            if choices == 'todos':
+                indices_to_try = range(len(offer_for_reuse))
+            else:
+                try: indices_to_try = [int(x.strip()) - 1 for x in choices.split(',')]
+                except ValueError: print("❌ Entrada inválida.")
+
+            for idx in indices_to_try:
+                if 0 <= idx < len(offer_for_reuse):
+                    chosen_meta = offer_for_reuse[idx]
+                    file_id = chosen_meta["name"] # O ID é o campo 'name'
+                    if file_id in reused_file_ids: continue
+                    try:
+                        file_obj = api_files_dict.get(file_id)
+                        if not file_obj: file_obj = genai.get_file(name=file_id)
+                        uploaded_file_objects.append(file_obj)
+                        uploaded_files_metadata.append(chosen_meta)
+                        reused_file_ids.add(file_id)
+                        print(f"✅ Arquivo '{file_obj.display_name}' reutilizado.")
+                    except Exception as e:
+                        print(f"❌ Erro ao obter arquivo '{chosen_meta['display_name']}': {e}")
+                else: print(f"❌ Índice inválido: {idx + 1}")
 
     print_user_message("Adicionar NOVOS arquivos? (s/n)")
     if input("➡️ ").strip().lower() == 's':
@@ -192,14 +213,42 @@ def get_uploaded_files_info_from_user():
             print_user_message("Caminho do arquivo/padrão (ou 'fim'):")
             fp_pattern = input("➡️ ").strip()
             if fp_pattern.lower() == 'fim': break
-            # ... (Lógica de upload de arquivos aqui) ...
+            
+            try:
+                expanded_files = glob.glob(fp_pattern, recursive=True) if any(c in fp_pattern for c in ['*', '?']) else ([fp_pattern] if os.path.isfile(fp_pattern) else [])
+                if not expanded_files:
+                    print(f"❌ Nenhum arquivo encontrado para '{fp_pattern}'")
+                    continue
+                
+                for fp in expanded_files:
+                    try:
+                        print_agent_message("Sistema", f"Upload de '{os.path.basename(fp)}'...")
+                        uf = genai.upload_file(path=fp, display_name=os.path.basename(fp))
+                        uploaded_file_objects.append(uf)
+                        uf_meta = uf.to_dict()
+                        uf_meta['user_path'] = fp
+                        uf_meta['file_id'] = uf.name # Adiciona 'file_id' para consistência
+                        uploaded_files_metadata.append(uf_meta)
+                        print(f"✅ '{uf.display_name}' (ID: {uf.name}) enviado!")
+                    except Exception as e:
+                        print(f"❌ Erro no upload de '{fp}': {e}")
+            except Exception as e:
+                print(f"❌ Erro ao processar padrão '{fp_pattern}': {e}")
+
+    if uploaded_files_metadata:
+        try:
+            cache_path = os.path.join(UPLOADED_FILES_CACHE_DIR, f"uploaded_files_info_{CURRENT_TIMESTAMP_STR}.json")
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(uploaded_files_metadata, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            log_message(f"Erro ao salvar cache de uploads: {e}", "Sistema")
             
     return uploaded_file_objects, uploaded_files_metadata
 
 
 def format_uploaded_files_info_for_prompt_text(files_metadata_list):
     if not files_metadata_list: return "Nenhum arquivo complementar fornecido."
-    return "Arquivos complementares:\n" + "\n".join([f"- {m['display_name']} (ID: {m['file_id']})" for m in files_metadata_list])
+    return "Arquivos complementares:\n" + "\n".join([f"- {m['display_name']} (ID: {m.get('file_id') or m.get('name')})" for m in files_metadata_list])
 
 def get_user_feedback_or_approval():
     while True:
@@ -221,7 +270,7 @@ class ImageWorker:
         if response and response.candidates:
             for part in response.candidates[0].content.parts:
                 if part.inline_data:
-                    path = os.path.join(TEMP_ARTIFACTS_DIR, f"temp_img_{int(time.time())}.png")
+                    path = os.path.join(TEMP_ARTIFACTS_DIR, f"temp_img_{int(time.time())}_{sanitize_filename(prompt[:20],False)}.png")
                     with open(path, "wb") as f: f.write(part.inline_data.data)
                     return path
         return "Falha na geração da imagem."
@@ -236,7 +285,7 @@ class Validator:
     def __init__(self, tm_ref): self.tm = tm_ref
     def evaluate_and_select_image_concepts(self, goal, results, files, meta):
         print_agent_message("Validator", "Avaliando conceitos de imagem...")
-        summary = "\n".join([f"Prompt: '{r['image_prompt_used']}', Sucesso: {os.path.exists(str(r.get('result')))}" for r in results])
+        summary = "\n".join([f"Tentativa {i+1}: Prompt='{r['image_prompt_used']}', Sucesso={os.path.exists(str(r.get('result')))}" for i, r in enumerate(results)]) or "Nenhuma."
         prompt = f'Meta: "{goal}"\nTentativas:\n{summary}\nRetorne um array JSON com os prompts aprovados. Apenas o array.'
         response = call_gemini_api_with_retry([prompt] + files, "Validator", GEMINI_TEXT_MODEL_NAME, generation_config_text)
         try:
@@ -251,7 +300,7 @@ class Validator:
         prompt = f'Meta: "{goal}"\nContexto: {context}\nArtefatos: {summary}\nRetorne JSON com "validation_passed" (bool), "main_report" (markdown), "general_evaluation" (texto).'
         response = call_gemini_api_with_retry([prompt] + files, "Validator", GEMINI_TEXT_MODEL_NAME, generation_config_text)
         try:
-            match = re.search(r'```json\s*([\s\S]*?)\s*```', response)
+            match = re.search(r'```json\s*([\s\S]*?)\s*```', response, re.DOTALL)
             data = json.loads(match.group(1)) if match else {}
             if data.get("validation_passed"):
                 final_dir = os.path.join(OUTPUT_DIRECTORY, f"artefatos_finais_{sanitize_filename(goal, False)}_{CURRENT_TIMESTAMP_STR}")
@@ -284,8 +333,11 @@ class TaskManager:
         try:
             match = re.search(r'\[.*\]', response_text, re.DOTALL)
             self.task_list = json.loads(match.group(0)) if match else []
+            log_message(f"Plano de tarefas decomposto: {self.task_list}", agent_display_name)
             return bool(self.task_list)
-        except: return False
+        except Exception as e:
+            log_message(f"Erro na decomposição da tarefa: {e}", agent_display_name)
+            return False
 
     def run_workflow(self, initial_goal, uploaded_file_objects, uploaded_files_metadata):
         self.uploaded_files_metadata = uploaded_files_metadata
@@ -315,7 +367,8 @@ class TaskManager:
                 
                 if task_desc.startswith("TASK_GERAR_IMAGEM:"):
                     prompt = task_desc.replace("TASK_GERAR_IMAGEM:", "").strip()
-                    if not prompt and self.completed_tasks_results: prompt = self.completed_tasks_results[-1]['result']
+                    if not prompt and self.completed_tasks_results and "descrição" in self.completed_tasks_results[-1]['task'].lower():
+                        prompt = self.completed_tasks_results[-1]['result']
                     result = self.image_worker.generate_image(prompt)
                     image_generation_attempts.append({"image_prompt_used": prompt, "result": result})
                     self.completed_tasks_results.append({"task": task_desc, "result": result})
@@ -326,7 +379,9 @@ class TaskManager:
                 else:
                     result, new_tasks = self.worker.execute_sub_task(task_desc, context, uploaded_file_objects)
                     self.completed_tasks_results.append({"task": task_desc, "result": result})
-                    # (Lógica para adicionar new_tasks aqui, se necessário)
+                    if new_tasks:
+                        # (Lógica para confirmar e adicionar novas tarefas aqui)
+                        pass
                 
                 current_task_index += 1
 
@@ -346,6 +401,7 @@ class TaskManager:
             user_choice = get_user_feedback_or_approval()
             if user_choice == 'a':
                 print_agent_message("TaskManager", "Aprovação manual. Salvando último estado..."); 
+                # Re-executa o salvamento mesmo que a validação automática tenha falhado
                 self.validator.validate_and_save_final_output(initial_goal, final_context, uploaded_file_objects, self.temp_artifacts)
                 overall_success = True; break
             elif user_choice == 's':
@@ -363,9 +419,9 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v9.4.2"
+    SCRIPT_VERSION = "v9.4.2c"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
-    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Correção de Bug NameError) ---")
+    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Correção de Bugs Críticos) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas Finais: {OUTPUT_DIRECTORY}\n⏳ Artefatos Temporários: {TEMP_ARTIFACTS_DIR}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
     
     print_user_message("Deseja limpar o cache de uploads (local e/ou da API Gemini) antes de começar? (s/n)")
