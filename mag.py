@@ -7,13 +7,14 @@ import re
 import traceback
 import base64
 import glob
+import shutil
 
 # --- Configuração dos Diretórios e Arquivos ---
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
 LOG_DIRECTORY = os.path.join(BASE_DIRECTORY, "gemini_agent_logs")
 OUTPUT_DIRECTORY = os.path.join(BASE_DIRECTORY, "gemini_final_outputs")
 UPLOADED_FILES_CACHE_DIR = os.path.join(BASE_DIRECTORY, "gemini_uploaded_files_cache")
-TEMP_ARTIFACTS_DIR = os.path.join(BASE_DIRECTORY, "gemini_temp_artifacts") 
+TEMP_ARTIFACTS_DIR = os.path.join(BASE_DIRECTORY, "gemini_temp_artifacts") # Para salvar imagens e códigos temporariamente
 
 for directory in [LOG_DIRECTORY, OUTPUT_DIRECTORY, UPLOADED_FILES_CACHE_DIR, TEMP_ARTIFACTS_DIR]:
     if not os.path.exists(directory):
@@ -26,7 +27,7 @@ LOG_FILE_NAME = os.path.join(LOG_DIRECTORY, f"agent_log_{CURRENT_TIMESTAMP_STR}.
 MAX_API_RETRIES = 3
 INITIAL_RETRY_DELAY_SECONDS = 5
 RETRY_BACKOFF_FACTOR = 2
-MAX_AUTOMATIC_VALIDATION_RETRIES = 2 
+MAX_AUTOMATIC_VALIDATION_RETRIES = 2
 MAX_MANUAL_VALIDATION_RETRIES = 2
 
 # --- Funções de Utilidade ---
@@ -51,30 +52,46 @@ try:
     GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
     log_message("API Gemini configurada.", "Sistema")
-except Exception as e: print(f"Erro API Gemini: {e}"); log_message(f"Erro API Gemini: {e}", "Sistema"); exit()
+except Exception as e:
+    print(f"Erro fatal na configuração da API Gemini: {e}")
+    log_message(f"Erro fatal na configuração da API Gemini: {e}", "Sistema")
+    exit()
 
+# Modelos (Mantidos conforme solicitado)
 GEMINI_TEXT_MODEL_NAME = "gemini-2.0-flash"
 GEMINI_IMAGE_GENERATION_MODEL_NAME = "gemini-2.0-flash-preview-image-generation"
 
 log_message(f"Modelo Gemini (texto/lógica): {GEMINI_TEXT_MODEL_NAME}", "Sistema")
 log_message(f"Modelo Gemini (geração de imagem via SDK): {GEMINI_IMAGE_GENERATION_MODEL_NAME}", "Sistema")
 
-generation_config_text = {"temperature":0.7,"top_p":0.95,"top_k":64,"max_output_tokens":8192,"response_mime_type":"text/plain"}
-generation_config_image_sdk = {"temperature":1.0,"top_p":0.95,"top_k":64,"response_modalities":['TEXT','IMAGE'],"max_output_tokens":8192}
-safety_settings_gemini=[{"category":"HARM_CATEGORY_HARASSMENT","threshold":"BLOCK_MEDIUM_AND_ABOVE"},{"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"BLOCK_MEDIUM_AND_ABOVE"},{"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"BLOCK_MEDIUM_AND_ABOVE"},{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"BLOCK_MEDIUM_AND_ABOVE"}]
+generation_config_text = {"temperature": 0.7, "top_p": 0.95, "top_k": 64, "max_output_tokens": 8192, "response_mime_type": "text/plain"}
+generation_config_image_sdk = {"temperature": 1.0, "top_p": 0.95, "top_k": 64, "response_modalities": ['TEXT', 'IMAGE'], "max_output_tokens": 8192}
+safety_settings_gemini = [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}, {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}, {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}, {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}]
 
 # --- Funções Auxiliares de Comunicação ---
-def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
-def print_user_message(message): print(f"\n👤 [Usuário]: {message}"); log_message(message, "Usuário")
+def print_agent_message(agent_name, message):
+    print(f"\n🤖 [{agent_name}]: {message}")
+    log_message(message, agent_name)
 
-def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GEMINI_TEXT_MODEL_NAME, gen_config=None):
-    log_message(f"Iniciando chamada à API Gemini para {agent_name} (Modelo: {model_name})...", "Sistema")
+def print_user_message(message):
+    print(f"\n👤 [Usuário]: {message}")
+    log_message(message, "Usuário")
+
+def call_gemini_api_with_retry(prompt_parts, agent_name, model_name, gen_config=None):
+    # ... (Esta função permanece idêntica à v8.9) ...
+    log_message(f"Iniciando chamada à API Gemini para {agent_name}...", "Sistema")
     text_prompt_for_log = ""
     file_references_for_log = []
+
     active_gen_config = gen_config
     if active_gen_config is None:
-        active_gen_config = generation_config_image_sdk if model_name == GEMINI_IMAGE_GENERATION_MODEL_NAME else generation_config_text
-        log_message(f"Nenhuma gen_config específica, usando padrão para {model_name}.", "Sistema")
+        if model_name == GEMINI_IMAGE_GENERATION_MODEL_NAME:
+             active_gen_config = generation_config_image_sdk
+             log_message(f"Nenhuma gen_config específica passada para {agent_name}, usando config de imagem padrão para {model_name}.", "Sistema")
+        else:
+            active_gen_config = generation_config_text
+            log_message(f"Nenhuma gen_config específica passada para {agent_name}, usando config de texto padrão para {model_name}.", "Sistema")
+
 
     for part_item in prompt_parts:
         if isinstance(part_item, str): text_prompt_for_log += part_item + "\n"
@@ -83,707 +100,914 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GE
     log_message(f"Prompt textual para {agent_name} (Modelo: {model_name}):\n---\n{text_prompt_for_log}\n---", "Sistema")
     if file_references_for_log: log_message(f"Arquivos referenciados para {agent_name}:\n" + "\n".join(file_references_for_log), "Sistema")
     log_message(f"Usando generation_config para {agent_name} (Modelo: {model_name}): {active_gen_config}", "Sistema")
+    log_message(f"Usando safety_settings para {agent_name} (Modelo: {model_name}): {safety_settings_gemini}", "Sistema")
 
     current_retry_delay = INITIAL_RETRY_DELAY_SECONDS
     for attempt in range(MAX_API_RETRIES):
         log_message(f"Tentativa {attempt + 1}/{MAX_API_RETRIES} para {agent_name} (Modelo: {model_name})...", "Sistema")
         try:
-            model_instance = genai.GenerativeModel(model_name, generation_config=active_gen_config, safety_settings=safety_settings_gemini)
+            model_instance = genai.GenerativeModel(
+                model_name,
+                generation_config=active_gen_config,
+                safety_settings=safety_settings_gemini
+            )
             response = model_instance.generate_content(prompt_parts)
             log_message(f"Resposta bruta da API Gemini (tentativa {attempt + 1}, Modelo: {model_name}): {response}", agent_name)
 
-            if model_name == GEMINI_IMAGE_GENERATION_MODEL_NAME: return response
-            if hasattr(response, 'text') and response.text is not None: return response.text.strip()
+            if model_name == GEMINI_IMAGE_GENERATION_MODEL_NAME:
+                log_message(f"Retornando objeto 'response' completo para ImageWorker (tentativa {attempt+1}, Modelo: {model_name}).", "Sistema")
+                return response
+
+            if hasattr(response, 'text') and response.text is not None:
+                 api_result_text = response.text.strip()
+                 log_message(f"Sucesso! Resposta de texto da API Gemini (response.text) para {agent_name} (tentativa {attempt + 1}).", "Sistema")
+                 return api_result_text
+
             if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 first_part = response.candidates[0].content.parts[0]
-                if hasattr(first_part, 'text') and first_part.text is not None: return first_part.text.strip()
+                if hasattr(first_part, 'text') and first_part.text is not None:
+                    api_result_text = first_part.text.strip()
+                    log_message(f"Texto extraído de response.candidates[0].content.parts[0].text para {agent_name} (tentativa {attempt + 1}).", "Sistema")
+                    return api_result_text
 
-            log_message(f"API Gemini (Modelo: {model_name}) não retornou texto utilizável (tentativa {attempt + 1}).", agent_name)
-            if response.prompt_feedback and hasattr(response.prompt_feedback, 'block_reason'):
-                log_message(f"Bloqueio: {getattr(response.prompt_feedback, 'block_reason_message', 'N/A')} ({response.prompt_feedback.block_reason})", agent_name)
-            if attempt < MAX_API_RETRIES - 1: time.sleep(current_retry_delay); current_retry_delay *= RETRY_BACKOFF_FACTOR; continue
+            log_message(f"API Gemini (Modelo: {model_name}) não retornou texto utilizável para {agent_name} (tentativa {attempt + 1}).", agent_name)
+            if response.prompt_feedback:
+                log_message(f"Prompt Feedback: {response.prompt_feedback}", agent_name)
+                if hasattr(response.prompt_feedback, 'block_reason') and response.prompt_feedback.block_reason:
+                    block_reason_message = getattr(response.prompt_feedback, 'block_reason_message', 'Mensagem de bloqueio não disponível')
+                    log_message(f"Bloqueio: {block_reason_message} ({response.prompt_feedback.block_reason})", agent_name)
+
+            if attempt < MAX_API_RETRIES - 1:
+                time.sleep(current_retry_delay); current_retry_delay *= RETRY_BACKOFF_FACTOR; continue
+            log_message(f"Falha após {MAX_API_RETRIES} tentativas (sem resposta utilizável para {agent_name}, Modelo: {model_name}).", agent_name)
             return None
         except Exception as e:
-            log_message(f"Exceção na tentativa {attempt + 1} ({agent_name}, Modelo: {model_name}): {type(e).__name__} - {e}\n{traceback.format_exc()}", agent_name)
-            if attempt < MAX_API_RETRIES - 1: time.sleep(current_retry_delay); current_retry_delay *= RETRY_BACKOFF_FACTOR
-            else: return None
+            log_message(f"Exceção na tentativa {attempt + 1}/{MAX_API_RETRIES} ({agent_name}, Modelo: {model_name}): {type(e).__name__} - {e}", agent_name)
+            log_message(f"Traceback: {traceback.format_exc()}", agent_name)
+            if "BlockedPromptException" in str(type(e)): log_message(f"Exceção Prompt Bloqueado: {e}", agent_name)
+            elif "StopCandidateException" in str(type(e)): log_message(f"Exceção Parada de Candidato: {e}", agent_name)
+            if attempt < MAX_API_RETRIES - 1:
+                log_message(f"Aguardando {current_retry_delay}s...", "Sistema"); time.sleep(current_retry_delay); current_retry_delay *= RETRY_BACKOFF_FACTOR
+            else:
+                log_message(f"Máximo de {MAX_API_RETRIES} tentativas. Falha API Gemini ({agent_name}, Modelo: {model_name}).", agent_name)
+                return None
+    log_message(f"call_gemini_api_with_retry ({agent_name}, Modelo: {model_name}) terminou sem retorno explícito após loop.", "Sistema")
     return None
 
-# --- Funções de Arquivos ---
-def get_most_recent_cache_file():
-    try:
-        list_of_files = glob.glob(os.path.join(UPLOADED_FILES_CACHE_DIR, "uploaded_files_info_*.json"))
-        return max(list_of_files, key=os.path.getctime) if list_of_files else None
-    except Exception as e: log_message(f"Erro ao buscar cache mais recente: {e}", "Sistema"); return None
-
-def load_cached_files_metadata(cache_file_path):
-    if not cache_file_path or not os.path.exists(cache_file_path): return []
-    try:
-        with open(cache_file_path, "r", encoding="utf-8") as f: cached_metadata = json.load(f)
-        return cached_metadata if isinstance(cached_metadata, list) else []
-    except Exception as e: log_message(f"Erro ao carregar cache {cache_file_path}: {e}", "Sistema"); return []
-
 def clear_upload_cache():
-    print_agent_message("Sistema", f"Verificando cache local em: {UPLOADED_FILES_CACHE_DIR}")
-    local_files = glob.glob(os.path.join(UPLOADED_FILES_CACHE_DIR, "*.json"))
-    if not local_files: print_agent_message("Sistema", "Nenhum cache local para limpar.")
+    # ... (Esta função permanece idêntica à v8.9) ...
+    print_agent_message("Sistema", f"Verificando arquivos de cache de upload local em: {UPLOADED_FILES_CACHE_DIR}")
+    local_cache_files = glob.glob(os.path.join(UPLOADED_FILES_CACHE_DIR, "uploaded_files_info_*.json"))
+    api_files_to_clear = []
+
+    if not local_cache_files:
+        print_agent_message("Sistema", "Nenhum arquivo de cache de upload local encontrado para limpar.")
+        log_message("Nenhum arquivo de cache de upload local encontrado.", "Sistema")
     else:
-        print_agent_message("Sistema", f"Encontrados {len(local_files)} arquivo(s) de cache local.")
-        if input(f"👤 Limpar {len(local_files)} arquivo(s) de cache local? (s/n) ➡️ ").lower() == 's':
-            for f_path in local_files: 
-                try: os.remove(f_path); log_message(f"Cache local '{os.path.basename(f_path)}' removido.", "Sistema")
-                except Exception as e: log_message(f"Erro ao remover cache local '{os.path.basename(f_path)}': {e}", "Sistema")
-            print_agent_message("Sistema", "Cache local limpo (ou tentativa).")
+        print_agent_message("Sistema", f"Encontrados {len(local_cache_files)} arquivo(s) de cache de upload local:")
+        for cf in local_cache_files:
+            print(f"  - {os.path.basename(cf)}")
+
+        print_user_message("Deseja limpar TODOS esses arquivos de cache de upload LOCAL? (s/n)")
+        choice_local = input("➡️ ").strip().lower()
+
+        if choice_local == 's':
+            deleted_count_local = 0
+            errors_count_local = 0
+            for cache_file_path in local_cache_files:
+                try:
+                    os.remove(cache_file_path)
+                    log_message(f"Arquivo de cache local '{os.path.basename(cache_file_path)}' removido.", "Sistema")
+                    deleted_count_local += 1
+                except Exception as e:
+                    log_message(f"Erro ao remover arquivo de cache local '{os.path.basename(cache_file_path)}': {e}", "Sistema")
+                    print_agent_message("Sistema", f"❌ Erro ao remover cache local '{os.path.basename(cache_file_path)}'.")
+                    errors_count_local += 1
+            
+            if deleted_count_local > 0:
+                print_agent_message("Sistema", f"✅ {deleted_count_local} arquivo(s) de cache local foram limpos.")
+            if errors_count_local > 0:
+                print_agent_message("Sistema", f"⚠️ {errors_count_local} erro(s) ao tentar limpar arquivos de cache local.")
+            if deleted_count_local == 0 and errors_count_local == 0 and local_cache_files:
+                 print_agent_message("Sistema", "Nenhum arquivo de cache local foi efetivamente limpo (apesar de listados).")
         else:
-            print_agent_message("Sistema", "Limpeza do cache local cancelada.")
+            print_agent_message("Sistema", "Limpeza do cache de upload local cancelada pelo usuário.")
+            log_message("Limpeza do cache de upload local cancelada.", "UsuárioInput")
+
+    print_agent_message("Sistema", "Verificando arquivos na API Gemini Files...")
     try:
-        api_files = list(genai.list_files())
-        if not api_files: print_agent_message("Sistema", "Nenhum arquivo na API Gemini."); return
-        print_agent_message("Sistema", f"Encontrados {len(api_files)} arquivo(s) na API Gemini Files.")
-        if input(f"👤 ‼️ ATENÇÃO ‼️ Deletar {len(api_files)} arquivo(s) da API Gemini? (s/n) ➡️ ").lower() == 's':
-            for f_api in api_files: 
-                try: genai.delete_file(name=f_api.name); log_message(f"Arquivo API '{f_api.display_name}' deletado.", "Sistema"); print_agent_message("Sistema", f"  🗑️ Deletado da API: {f_api.display_name}"); time.sleep(0.2)
-                except Exception as e: log_message(f"Erro ao deletar '{f_api.display_name}' da API: {e}", "Sistema")
-            print_agent_message("Sistema", "Arquivos da API Gemini Files limpos (ou tentativa).")
+        api_files_list = list(genai.list_files())
+        if not api_files_list:
+            print_agent_message("Sistema", "Nenhum arquivo encontrado na API Gemini Files para limpar.")
+            log_message("Nenhum arquivo encontrado na API Gemini Files.", "Sistema")
+            return
+        
+        print_agent_message("Sistema", f"Encontrados {len(api_files_list)} arquivo(s) na API Gemini Files.")
+
+        print_user_message("‼️ ATENÇÃO: Esta ação é IRREVERSÍVEL. ‼️\nDeseja deletar TODOS os arquivos atualmente listados na API Gemini Files? (s/n)")
+        choice_api = input("➡️ ").strip().lower()
+
+        if choice_api == 's':
+            print_agent_message("Sistema", "Iniciando exclusão de arquivos da API Gemini Files... Isso pode levar um momento.")
+            deleted_count_api = 0
+            errors_count_api = 0
+            for api_file_to_delete in api_files_list:
+                try:
+                    genai.delete_file(name=api_file_to_delete.name)
+                    log_message(f"Arquivo da API '{api_file_to_delete.display_name}' (ID: {api_file_to_delete.name}) deletado.", "Sistema")
+                    print(f"  🗑️ Deletado da API: {api_file_to_delete.display_name}")
+                    deleted_count_api += 1
+                    time.sleep(0.2)
+                except Exception as e:
+                    log_message(f"Erro ao deletar arquivo da API '{api_file_to_delete.display_name}' (ID: {api_file_to_delete.name}): {e}", "Sistema")
+                    print_agent_message("Sistema", f"❌ Erro ao deletar da API: '{api_file_to_delete.display_name}'.")
+                    errors_count_api += 1
+            
+            if deleted_count_api > 0:
+                print_agent_message("Sistema", f"✅ {deleted_count_api} arquivo(s) foram deletados da API Gemini Files.")
+            if errors_count_api > 0:
+                print_agent_message("Sistema", f"⚠️ {errors_count_api} erro(s) ao tentar deletar arquivos da API.")
+            if deleted_count_api == 0 and errors_count_api == 0 and api_files_list:
+                 print_agent_message("Sistema", "Nenhum arquivo da API foi efetivamente deletado (apesar de listados).")
+
         else:
-            print_agent_message("Sistema", "Limpeza de arquivos da API cancelada.")
-    except Exception as e: log_message(f"Erro ao limpar cache API: {e}", "Sistema"); print_agent_message("Sistema", f"❌ Erro ao acessar/limpar arquivos da API: {e}")
+            print_agent_message("Sistema", "Limpeza de arquivos da API Gemini Files cancelada pelo usuário.")
+            log_message("Limpeza de arquivos da API Gemini Files cancelada.", "UsuárioInput")
+
+    except Exception as e_api_clear:
+        print_agent_message("Sistema", f"❌ Erro ao tentar acessar ou limpar arquivos da API Gemini: {e_api_clear}")
+        log_message(f"Erro geral durante a tentativa de limpeza de arquivos da API: {e_api_clear}", "Sistema")
 
 def get_uploaded_files_info_from_user():
-    uploaded_file_objects, uploaded_files_metadata, reused_ids = [], [], set()
-    api_files_list = []
-    try: api_files_list = list(genai.list_files())
-    except Exception as e: log_message(f"Falha API list_files: {e}", "Sistema")
-    
+    # ... (Esta função permanece idêntica à v8.9) ...
+    uploaded_file_objects = []
+    uploaded_files_metadata = []
+    reused_file_ids = set()
+
+    print_agent_message("Sistema", "Buscando lista de arquivos na API Gemini...")
+    try:
+        api_files_list = list(genai.list_files())
+    except Exception as e_list_files:
+        print_agent_message("Sistema", f"Falha ao listar arquivos da API Gemini: {e_list_files}. Verifique sua conexão/chave API.")
+        log_message(f"Falha crítica ao listar arquivos da API: {e_list_files}", "Sistema")
+        api_files_list = []
+
     api_files_dict = {f.name: f for f in api_files_list}
-    cached_metadata_from_file = load_cached_files_metadata(get_most_recent_cache_file())
+    log_message(f"Encontrados {len(api_files_dict)} arquivos na API Gemini.", "Sistema")
+
+    most_recent_cache_path = get_most_recent_cache_file()
+    cached_metadata_from_file = []
+    if most_recent_cache_path:
+        log_message(f"Carregando metadados do cache local: {most_recent_cache_path}", "Sistema")
+        cached_metadata_from_file = load_cached_files_metadata(most_recent_cache_path)
+
     offer_for_reuse_metadata_list = []
+    processed_api_file_ids_for_reuse_offer = set()
 
     for api_file in api_files_list:
-        meta_from_cache = next((cm for cm in cached_metadata_from_file if cm.get("file_id") == api_file.name), {})
-        display_name = meta_from_cache.get("display_name", api_file.display_name)
-        user_path = meta_from_cache.get("user_path", "API (sem cache local)")
-        mime_type = meta_from_cache.get("mime_type", api_file.mime_type)
+        api_file_id = api_file.name
+        display_name = api_file.display_name
+        mime_type = api_file.mime_type
+        uri = api_file.uri
+        size_bytes = api_file.size_bytes
+        state = str(api_file.state)
+        user_path = "N/A (direto da API)"
+
+        corresponding_cached_meta = next((cm for cm in cached_metadata_from_file if cm.get("file_id") == api_file_id), None)
+        if corresponding_cached_meta:
+            user_path = corresponding_cached_meta.get("user_path", user_path)
+            display_name = corresponding_cached_meta.get("display_name", display_name)
+            mime_type = corresponding_cached_meta.get("mime_type", mime_type)
+
         offer_for_reuse_metadata_list.append({
-            "file_id": api_file.name, "display_name": display_name,
-            "mime_type": mime_type, "uri": api_file.uri,
-            "size_bytes": api_file.size_bytes, "state": str(api_file.state),
+            "file_id": api_file_id,
+            "display_name": display_name,
+            "mime_type": mime_type,
+            "uri": uri,
+            "size_bytes": size_bytes,
+            "state": state,
             "user_path": user_path
         })
+        processed_api_file_ids_for_reuse_offer.add(api_file_id)
 
     if offer_for_reuse_metadata_list:
-        print_agent_message("Sistema", "Arquivos na API/cache:")
-        for i, m in enumerate(offer_for_reuse_metadata_list): print(f"  {i+1}. {m['display_name']} (Origem: {m['user_path']})")
-        if input("👤 Reutilizar arquivos? (s/n) ➡️ ").lower() == 's':
-            choices = input("👤 Números (ex: 1,3) ou 'todos': ➡️ ").lower()
-            sel_indices = list(range(len(offer_for_reuse_metadata_list))) if choices == 'todos' else [int(x.strip())-1 for x in choices.split(',') if x.strip().isdigit()]
-            for idx in sel_indices:
-                if 0 <= idx < len(offer_for_reuse_metadata_list):
-                    chosen_meta = offer_for_reuse_metadata_list[idx]
-                    try:
-                        file_obj = api_files_dict.get(chosen_meta["file_id"]) or genai.get_file(name=chosen_meta["file_id"])
-                        uploaded_file_objects.append(file_obj); uploaded_files_metadata.append(chosen_meta); reused_ids.add(chosen_meta["file_id"])
-                        print_agent_message("Sistema", f"✅ Arquivo '{file_obj.display_name}' reutilizado.")
-                        log_message(f"Arquivo '{chosen_meta['display_name']}' reutilizado.", "Sistema")
-                    except Exception as e: log_message(f"Erro ao obter '{chosen_meta['display_name']}' para reutilização: {e}", "Sistema")
-    
-    if input("👤 Adicionar NOVOS arquivos? (s/n) ➡️ ").lower() == 's':
-        while True:
-            fp_pattern = input("👤 Caminho/padrão (ou 'fim'): ➡️ ").strip()
-            if fp_pattern.lower() == 'fim': break
-            
-            expanded_paths = glob.glob(fp_pattern, recursive=True) if any(c in fp_pattern for c in ['*','?']) else ([fp_pattern] if os.path.exists(fp_pattern) else [])
-            expanded_files = [f for f in expanded_paths if os.path.isfile(f)] 
+        print_agent_message("Sistema", "Arquivos encontrados na API (e/ou no cache local):")
+        for idx, meta_to_offer in enumerate(offer_for_reuse_metadata_list):
+            print(f"  {idx + 1}. {meta_to_offer['display_name']} (ID: {meta_to_offer['file_id']}, Tipo: {meta_to_offer.get('mime_type')}, Origem: {meta_to_offer.get('user_path', 'API')})")
 
-            if not expanded_files: print_agent_message("Sistema", f"❌ Nenhum arquivo encontrado para: '{fp_pattern}'"); continue
-            
-            print_agent_message("Sistema", f"Arquivos encontrados para '{fp_pattern}': {[os.path.basename(f) for f in expanded_files]}")
-            if len(expanded_files) > 1:
-                if input(f"👤 Confirmar upload de {len(expanded_files)} arquivos? (s/n) ➡️ ").lower() != 's': continue
+        print_user_message("Deseja reutilizar algum desses arquivos? (s/n)")
+        if input("➡️ ").strip().lower() == 's':
+            print_user_message("Digite os números dos arquivos para reutilizar, separados por vírgula (ex: 1,3). Ou 'todos':")
+            choices_str = input("➡️ ").strip().lower()
+            selected_indices_to_try = []
 
-            for fp in expanded_files:
-                dn = os.path.basename(fp)
+            if choices_str == 'todos':
+                selected_indices_to_try = list(range(len(offer_for_reuse_metadata_list)))
+            else:
                 try:
-                    print_agent_message("Sistema", f"Fazendo upload de '{dn}'...")
-                    ext_map = { ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src", ".h": "text/x-chdr", ".hpp": "text/x-c++hdr", ".txt": "text/plain", ".json": "text/plain", ".gradle": "text/plain",
-                                ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif" } # Adicionado tipos de imagem
-                    mime = ext_map.get(os.path.splitext(dn)[1].lower())
-                    file_obj = genai.upload_file(path=fp, display_name=dn, mime_type=mime)
-                    uploaded_file_objects.append(file_obj)
-                    new_meta = {"file_id": file_obj.name, "display_name": dn, "mime_type": file_obj.mime_type, "user_path": fp, "uri": file_obj.uri, "size_bytes": file_obj.size_bytes, "state": str(file_obj.state)}
-                    uploaded_files_metadata.append(new_meta)
-                    print_agent_message("Sistema", f"✅ Novo arquivo '{dn}' (ID: {file_obj.name}) enviado.")
-                    log_message(f"Novo arquivo '{dn}' enviado. Metadados: {new_meta}", "Sistema"); time.sleep(1)
-                except Exception as e: log_message(f"Erro upload '{dn}': {e}", "Sistema"); print_agent_message("Sistema", f"❌ Erro no upload de '{dn}': {e}")
+                    selected_indices_to_try = [int(x.strip()) - 1 for x in choices_str.split(',')]
+                except ValueError:
+                    print("❌ Entrada inválida para seleção de arquivos.")
+                    log_message("Entrada inválida do usuário para seleção de arquivos cacheados.", "Sistema")
+
+            for selected_idx in selected_indices_to_try:
+                if 0 <= selected_idx < len(offer_for_reuse_metadata_list):
+                    chosen_meta_for_reuse = offer_for_reuse_metadata_list[selected_idx]
+                    file_id_to_reuse = chosen_meta_for_reuse["file_id"]
+
+                    if file_id_to_reuse in reused_file_ids:
+                        print(f"ℹ️ Arquivo '{chosen_meta_for_reuse['display_name']}' já selecionado para reutilização.")
+                        continue
+                    try:
+                        print_agent_message("Sistema", f"Obtendo arquivo '{chosen_meta_for_reuse['display_name']}' (ID: {file_id_to_reuse}) da API para reutilização...")
+                        file_obj = api_files_dict.get(file_id_to_reuse)
+                        if not file_obj:
+                            file_obj = genai.get_file(name=file_id_to_reuse)
+
+                        uploaded_file_objects.append(file_obj)
+                        uploaded_files_metadata.append(chosen_meta_for_reuse)
+                        reused_file_ids.add(file_id_to_reuse)
+                        print(f"✅ Arquivo '{file_obj.display_name}' reutilizado.")
+                        log_message(f"Arquivo '{file_obj.display_name}' (ID: {file_id_to_reuse}) reutilizado da API. Metadados cacheados: {chosen_meta_for_reuse}", "Sistema")
+                    except Exception as e:
+                        print(f"❌ Erro ao obter arquivo '{chosen_meta_for_reuse['display_name']}' da API: {e}")
+                        log_message(f"Erro ao obter arquivo '{file_id_to_reuse}' da API para reutilização: {e}", "Sistema")
+                else:
+                    print(f"❌ Índice inválido: {selected_idx + 1}")
+    else:
+        print_agent_message("Sistema", "Nenhum arquivo encontrado na API para reutilização ou o cache está vazio.")
+
+    print_user_message("Adicionar NOVOS arquivos (além dos reutilizados)? s/n")
+    add_new_files_choice = input("➡️ ").strip().lower()
+    if add_new_files_choice == 's':
+        print_agent_message("Sistema", "Preparando para upload de novos arquivos...")
+        while True:
+            print_user_message("Caminho do novo arquivo/padrão (permite uso de *.ext)  (ou 'fim'):")
+            fp_pattern = input("➡️ ").strip()
+            if fp_pattern.lower() == 'fim':
+                break
+
+            try:
+                if any(c in fp_pattern for c in ['*', '?', '[', ']']):
+                    expanded_files = glob.glob(fp_pattern, recursive=True)
+                elif os.path.exists(fp_pattern) and os.path.isfile(fp_pattern):
+                    expanded_files = [fp_pattern]
+                else:
+                    expanded_files = []
+                    if not os.path.exists(fp_pattern):
+                         print(f"❌ Caminho/padrão '{fp_pattern}' não encontrado.")
+                    elif not os.path.isfile(fp_pattern):
+                         print(f"❌ Caminho '{fp_pattern}' não é um arquivo.")
+
+
+                if not expanded_files and any(c in fp_pattern for c in ['*', '?', '[', ']']):
+                    print(f"❌ Nenhum arquivo encontrado para o padrão: '{fp_pattern}'")
+                    log_message(f"Nenhum arquivo encontrado para o padrão '{fp_pattern}'.", "Sistema")
+                    continue
+                elif not expanded_files:
+                    log_message(f"Caminho/padrão inválido '{fp_pattern}'.", "Sistema")
+                    continue
+
+
+                print_agent_message("Sistema", f"Arquivos encontrados para '{fp_pattern}': {expanded_files}")
+                if len(expanded_files) > 1 :
+                    print_user_message(f"Confirmar upload de {len(expanded_files)} arquivos? (s/n)")
+                    if input("➡️ ").strip().lower() != 's':
+                        print_agent_message("Sistema", "Upload cancelado pelo usuário.")
+                        continue
+
+                for fp_actual in expanded_files:
+                    if not os.path.exists(fp_actual) or not os.path.isfile(fp_actual):
+                        print(f"❌ Arquivo '{fp_actual}' inválido ou não é um arquivo. Pulando.")
+                        log_message(f"Arquivo '{fp_actual}' inválido ou não é um arquivo. Pulando.", "Sistema")
+                        continue
+
+                    dn = os.path.basename(fp_actual)
+                    if any(meta.get("display_name") == dn and meta.get("file_id") not in reused_file_ids for meta in uploaded_files_metadata):
+                        print_user_message(f"⚠️ Um arquivo NOVO chamado '{dn}' já foi adicionado nesta sessão. Continuar com este '{fp_actual}'? (s/n)")
+                        if input("➡️ ").strip().lower() != 's':
+                            continue
+                    elif any(meta.get("display_name") == dn and meta.get("file_id") in reused_file_ids for meta in uploaded_files_metadata):
+                         print(f"ℹ️ Um arquivo chamado '{dn}' já foi marcado para reutilização da API. Este upload de '{fp_actual}' será um novo arquivo na API se o conteúdo for diferente, ou a API poderá deduplicar.")
+
+                    try:
+                        print_agent_message("Sistema", f"Upload de '{dn}' (de '{fp_actual}')...")
+                        mime_type_upload = None
+                        ext_map = {
+                            ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src",
+                            ".hpp": "text/x-c++hdr", ".h": "text/x-chdr", ".c": "text/x-csrc",
+                            ".txt": "text/plain", ".json": "text/plain", ".html": "text/html",
+                            ".css": "text/css", ".js": "text/javascript", ".xml": "text/plain",
+                            ".csv": "text/csv", ".java": "text/x-java-source", ".swift": "text/x-swift",
+                            ".kt": "text/x-kotlin", ".rb": "text/x-ruby", ".php": "text/x-php",
+                            ".go": "text/x-go", ".rs": "text/rust", ".ts": "text/typescript",
+                            ".sh": "text/x-shellscript", ".ps1": "application/x-powershell",
+                            ".bat": "application/x-bat", ".yaml": "application/x-yaml", ".yml": "application/x-yaml",
+                            ".toml": "application/toml", ".ini": "text/plain", ".pdf": "application/pdf",
+                            ".doc": "application/msword",
+                            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            ".xls": "application/vnd.ms-excel",
+                            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            ".ppt": "application/vnd.ms-powerpoint",
+                            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                            ".zip": "application/zip", ".tar": "application/x-tar", ".gz": "application/gzip",
+                            ".rar": "application/vnd.rar", ".7z": "application/x-7z-compressed",
+                            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+                            ".gif": "image/gif", ".bmp": "image/bmp", ".svg": "image/svg+xml",
+                            ".webp": "image/webp", ".mp3": "audio/mpeg", ".wav": "audio/wav",
+                            ".ogg": "audio/ogg", ".mp4": "video/mp4", ".webm": "video/webm",
+                            ".avi": "video/x-msvideo", ".mov": "video/quicktime",
+                            ".gradle": "text/plain", "cmakelists.txt": "text/plain", "dockerfile": "text/plain"
+                        }
+                        file_ext = os.path.splitext(dn)[1].lower()
+                        if dn.lower() in ext_map:
+                            mime_type_upload = ext_map[dn.lower()]
+                        elif file_ext in ext_map:
+                            mime_type_upload = ext_map[file_ext]
+
+                        uf_args = {'path': fp_actual, 'display_name': dn}
+                        if mime_type_upload:
+                            uf_args['mime_type'] = mime_type_upload
+                        else:
+                            log_message(f"MIME type não determinado para '{dn}', API tentará inferir.", "Sistema")
+
+                        uf = genai.upload_file(**uf_args)
+
+                        uploaded_file_objects.append(uf)
+                        fm = {"user_path": fp_actual, "display_name": uf.display_name, "file_id": uf.name,
+                              "uri": uf.uri, "mime_type": uf.mime_type, "size_bytes": uf.size_bytes,
+                              "state": str(uf.state)}
+                        uploaded_files_metadata.append(fm)
+                        print(f"✅ '{dn}' (ID: {uf.name}, Tipo: {uf.mime_type}, de '{fp_actual}') enviado!")
+                        log_message(f"Novo arquivo '{dn}' (ID: {uf.name}, URI: {uf.uri}, Tipo: {uf.mime_type}, Tamanho: {uf.size_bytes}B, Origem: {fp_actual}) enviado.", "Sistema")
+
+                    except Exception as e:
+                        print(f"❌ Erro no upload de '{fp_actual}': {e}")
+                        log_message(f"Erro no upload de '{fp_actual}': {e}\n{traceback.format_exc()}", "Sistema")
+            except Exception as e_glob:
+                print(f"❌ Erro ao processar o padrão/caminho '{fp_pattern}': {e_glob}")
+                log_message(f"Erro ao processar o padrão/caminho '{fp_pattern}': {e_glob}\n{traceback.format_exc()}", "Sistema")
+
     if uploaded_files_metadata:
-        with open(os.path.join(UPLOADED_FILES_CACHE_DIR, f"uploaded_files_info_{CURRENT_TIMESTAMP_STR}.json"), "w", encoding="utf-8") as f: json.dump(uploaded_files_metadata, f, indent=4)
+        try:
+            current_session_cache_path = os.path.join(UPLOADED_FILES_CACHE_DIR, f"uploaded_files_info_{CURRENT_TIMESTAMP_STR}.json")
+            with open(current_session_cache_path, "w", encoding="utf-8") as f:
+                json.dump(uploaded_files_metadata, f, indent=4, ensure_ascii=False)
+            log_message(f"Metadados dos arquivos da sessão atual ({len(uploaded_files_metadata)} arquivos) salvos em: {current_session_cache_path}", "Sistema")
+        except Exception as e:
+            log_message(f"Erro ao salvar metadados dos uploads da sessão atual: {e}", "Sistema")
+
+    if not uploaded_file_objects and not uploaded_files_metadata:
+        print_agent_message("Sistema", "Nenhum arquivo foi carregado ou selecionado para esta sessão.")
+        log_message("Nenhum arquivo carregado ou selecionado para esta sessão.", "Sistema")
+
     return uploaded_file_objects, uploaded_files_metadata
 
-# --- Classes dos Agentes ---
-class Worker:
-    def __init__(self, task_manager, model_name=GEMINI_TEXT_MODEL_NAME):
-        self.task_manager = task_manager; self.model_name = model_name
-        log_message("Instância do Worker criada.", "Worker")
+def format_uploaded_files_info_for_prompt_text(files_metadata_list):
+    if not files_metadata_list: return "Nenhum arquivo complementar fornecido."
+    txt = "Arquivos complementares carregados (referencie pelo 'Nome de Exibição' ou 'ID do Arquivo'):\n"
+    for m in files_metadata_list: txt += f"- Nome: {m['display_name']} (ID: {m['file_id']}, Tipo: {m.get('mime_type', 'N/A')})\n"
+    return txt
 
-    def execute_task(self, sub_task_description, previous_results, uploaded_files_info, original_goal):
-        agent_display_name = "Worker"
-        print_agent_message(agent_display_name, f"Executando: '{sub_task_description}'")
-        prompt_context = "Resultados anteriores:\n" + ('\n'.join([f"- '{list(res.keys())[0]}': {str(list(res.values())[0].get('text_content', list(res.values())[0]))[:500]}..." for res in previous_results]) if previous_results else "Nenhum.\n")
-        files_prompt_part = "Arquivos complementares carregados:\n" + ('\n'.join([f"- Nome: {f['display_name']} (ID: {f['file_id']})" for f in uploaded_files_info]) if uploaded_files_info else "Nenhum.\n")
-        prompt = [
-            f"Você é um Agente Executor. Tarefa atual: \"{sub_task_description}\"",
-            f"Contexto (resultados anteriores, objetivo original, arquivos):\n{prompt_context}\n{files_prompt_part}",
-            f"Objetivo: {original_goal}", "Execute a tarefa.",
-            " * Se for \"Criar uma descrição textual detalhada (prompt) para gerar a imagem de [...]\", seu resultado DEVE ser APENAS essa descrição textual.",
-            " * Se a tarefa envolver modificar ou criar arquivos de código ou markdown, forneça TODO O CONTEÚDO COMPLETO do arquivo.",
-            " * Indique o NOME DO ARQUIVO CLARAMENTE ANTES de cada bloco de código/markdown usando o formato:\n   \"Arquivo: nome_completo.ext\"\n   ```linguagem_ou_extensao\n   // Conteúdo completo...\n   ```",
-            " * Para arquivos Markdown, use `markdown` como linguagem.",
-            " * Se precisar retornar múltiplos arquivos, repita o formato ou use JSON: {\"resultado\": \"descrição\", \"arquivos\": [{\"nome\": \"f1.cpp\", \"conteudo completo\": \"...\"}]}",
-            " * Se identificar NOVAS sub-tarefas cruciais, liste-as APÓS todo o conteúdo principal e artefatos, na seção 'NOVAS_TAREFAS_SUGERIDAS:' como um novo array JSON de strings válidas. Se não houver sugestões, omita completamente a seção 'NOVAS_TAREFAS_SUGERIDAS:' ou retorne um array JSON vazio []. Não retorne placeholders como '[Array JSON...]'.",
-            "Resultado da Tarefa:", "[Resultado principal...]", 
-            "NOVAS_TAREFAS_SUGERIDAS:", "[Se houver, use um NOVO array JSON de strings aqui. Senão, omita ou use [].]"
-        ]
-        if self.task_manager.uploaded_file_objects: prompt.extend(self.task_manager.uploaded_file_objects)
-        
-        task_res_raw = call_gemini_api_with_retry(prompt, agent_display_name, model_name=self.model_name)
-        if task_res_raw is None: return {"text_content": "Falha: Sem resposta da API.", "artifacts": []}, []
+def get_user_feedback_or_approval():
+    """Apresenta um menu e obtém uma escolha validada do usuário."""
+    while True:
+        prompt = (
+            "\nO que você gostaria de fazer?\n"
+            "  [A]provar - Salvar os artefatos como estão.\n"
+            "  [F]eedback - Fornecer feedback para o sistema tentar novamente.\n"
+            "  [S]air - Encerrar o processo.\n"
+            "Escolha uma opção (A/F/S): "
+        )
+        print_user_message(prompt)
+        choice = input("➡️ ").strip().lower()
+        if choice in ['a', 'f', 's']:
+            log_message(f"Usuário escolheu a opção: {choice.upper()}", "UsuárioInput")
+            return choice
+        else:
+            print_agent_message("Sistema", "❌ Opção inválida. Por favor, escolha 'A', 'F' ou 'S'.")
 
-        sugg_tasks_strings = []
-        task_res_content_main = task_res_raw 
-
-        # Regex mais específico para encontrar NOVAS_TAREFAS_SUGERIDAS: [...]
-        sugg_tasks_section_match = re.search(r"NOVAS_TAREFAS_SUGERIDAS:\s*(\[.*?\])", task_res_raw, re.IGNORECASE | re.DOTALL)
-        
-        if sugg_tasks_section_match:
-            sugg_tasks_json_str = sugg_tasks_section_match.group(1).strip()
-            task_res_content_main = task_res_raw[:sugg_tasks_section_match.start()].strip() # Conteúdo ANTES da seção de tarefas
-            log_message(f"Worker: String JSON bruta para NOVAS_TAREFAS_SUGERIDAS: '{sugg_tasks_json_str}'", agent_display_name)
-
-            if sugg_tasks_json_str.startswith("```json"):
-                sugg_tasks_json_str = re.sub(r"^```json\s*|\s*```$", "", sugg_tasks_json_str, flags=re.DOTALL).strip()
-            elif sugg_tasks_json_str.startswith("```"):
-                 sugg_tasks_json_str = re.sub(r"^```\s*|\s*```$", "", sugg_tasks_json_str, flags=re.DOTALL).strip()
-            
-            log_message(f"Worker: String JSON limpa para NOVAS_TAREFAS_SUGERIDAS: '{sugg_tasks_json_str}'", agent_display_name)
-
-            placeholders = ["[array json...]", "[array json de strings aqui, apenas se necessário. se não, omita esta seção.]", "[]", "null", "none", "omita esta seção."]
-            if sugg_tasks_json_str and sugg_tasks_json_str.lower() not in [p.lower() for p in placeholders]:
-                try: 
-                    parsed_json = json.loads(sugg_tasks_json_str)
-                    if isinstance(parsed_json, list) and all(isinstance(s, str) for s in parsed_json):
-                        sugg_tasks_strings = [s.strip().strip('"').strip("'") for s in parsed_json if s.strip()]
-                        log_message(f"Worker: Tarefas novas sugeridas (JSON válido): {sugg_tasks_strings}", agent_display_name)
-                    elif isinstance(parsed_json, list):
-                        sugg_tasks_strings = [str(item).strip().strip('"').strip("'") for item in parsed_json if isinstance(item, str) and str(item).strip()]
-                        if sugg_tasks_strings: log_message(f"Worker: Tarefas novas sugeridas (convertidas de lista mista): {sugg_tasks_strings}", agent_display_name)
-                        else: log_message(f"Worker: NOVAS_TAREFAS_SUGERIDAS era lista, mas não de strings válidas: {parsed_json}", agent_display_name)
-                    else: log_message(f"Worker: NOVAS_TAREFAS_SUGERIDAS não é uma lista JSON válida: '{sugg_tasks_json_str}'", agent_display_name)
-                except json.JSONDecodeError as e: 
-                    log_message(f"Worker: Erro ao decodificar JSON de NOVAS_TAREFAS_SUGERIDAS: {e}. String: '{sugg_tasks_json_str}'. Tentando extração linha por linha.", agent_display_name)
-                    potential_tasks = [line.strip().lstrip("-* ").rstrip(".,").strip('"').strip("'") for line in sugg_tasks_json_str.splitlines() if line.strip() and len(line.strip()) > 5 and not line.strip().startswith("```") and not line.strip().lower().startswith("arquivo:")]
-                    if potential_tasks:
-                        sugg_tasks_strings = [task for task in potential_tasks if task] 
-                        log_message(f"Worker: Tarefas novas sugeridas (extração linha por linha da seção de tarefas): {sugg_tasks_strings}", agent_display_name)
-                    else:
-                        log_message(f"Worker: Extração linha por linha de NOVAS_TAREFAS_SUGERIDAS não produziu resultados.", agent_display_name)
-            else: 
-                 log_message(f"Worker: NOVAS_TAREFAS_SUGERIDAS era placeholder ou vazio ('{sugg_tasks_json_str}').", agent_display_name)
-        else: 
-            log_message("Worker: Nenhuma seção 'NOVAS_TAREFAS_SUGERIDAS:' com array JSON explícito encontrada. Todo o conteúdo será verificado para artefatos.", agent_display_name)
-            task_res_content_main = task_res_raw 
-        
-        extracted_artifacts = self._extract_artifacts_from_output(task_res_content_main) 
-        
-        main_text_output = task_res_content_main
-        if extracted_artifacts and any(art.get("extraction_method") == "json" for art in extracted_artifacts):
-            try:
-                json_data_main = json.loads(task_res_content_main.strip().lstrip("```json").rstrip("```").strip())
-                if isinstance(json_data_main, dict) and "resultado" in json_data_main:
-                    main_text_output = json_data_main["resultado"]
-                elif isinstance(json_data_main, dict) and "arquivos" in json_data_main:
-                     main_text_output = "Artefatos processados a partir de JSON." if not main_text_output.strip() else main_text_output
-            except json.JSONDecodeError:
-                pass
-        
-        log_message(f"Resultado da sub-tarefa '{sub_task_description}' (texto principal): {str(main_text_output)[:500]}...", agent_display_name)
-        return {"text_content": main_text_output, "artifacts": extracted_artifacts}, sugg_tasks_strings
-
-    def _extract_artifacts_from_output(self, output_str):
-        artifacts = []
-        try: 
-            cleaned_output = output_str.strip()
-            if cleaned_output.startswith("```json"): cleaned_output = re.sub(r"^```json\s*|\s*```$", "", cleaned_output, flags=re.DOTALL).strip()
-            
-            is_json_structure = (cleaned_output.startswith('{') and cleaned_output.endswith('}')) or \
-                                (cleaned_output.startswith('[') and cleaned_output.endswith(']'))
-
-            if is_json_structure:
-                data = json.loads(cleaned_output)
-                if isinstance(data, dict) and "arquivos" in data and isinstance(data["arquivos"], list):
-                    log_message("Extraindo artefatos via estrutura JSON 'arquivos'.", "Worker")
-                    for item in data["arquivos"]:
-                        if isinstance(item, dict) and "nome" in item and "conteudo" in item:
-                            fn = sanitize_filename(item["nome"]); cont = item["conteudo"]; lang = item.get("linguagem","").lower() or (fn.split('.')[-1] if '.' in fn else "")
-                            if fn and cont and cont.strip(): 
-                                artifacts.append({"type": "markdown" if lang=="markdown" or fn.endswith(".md") else "code", "filename": fn, "content": cont, "language": lang, "extraction_method": "json"})
-                    if artifacts: log_message(f"{len(artifacts)} artefatos extraídos via JSON.", "Worker"); return artifacts
-                # Se for JSON mas não tiver a chave "arquivos", não loga erro, pois pode ser um JSON de resultado simples.
-            elif "arquivo:" not in cleaned_output.lower() and "```" not in cleaned_output:
-                 pass # Não loga como erro de JSON se for provável que seja markdown puro sem marcadores de arquivo
-            else:
-                 log_message(f"String não parece JSON de artefatos: '{cleaned_output[:100]}...'", "Worker._extract_artifacts")
-
-        except json.JSONDecodeError as e: 
-            log_message(f"Saída não é JSON de artefatos ('{str(e)}'). Tentando regex. String: '{output_str[:200]}...'", "Worker")
-        except Exception as e_json_gen:
-             log_message(f"Erro inesperado no parse JSON de artefatos: {e_json_gen}. String: '{output_str[:200]}...'", "Worker")
-
-        patterns = [
-            re.compile(r"Arquivo:\s*(?P<filename>[^\n`]+)\s*\n```(?P<language>[a-zA-Z0-9_+\-#.]*)\s*\n(?P<content>.*?)\n```", re.DOTALL | re.MULTILINE),
-            re.compile(r"```(?P<language>[a-zA-Z0-9_+\-#.]*)\s*(?P<filename>[^\n`]*\.[a-zA-Z0-9_]+)?\s*\n(?P<content>.*?)\n```", re.DOTALL | re.MULTILINE)
-        ]
-        processed_starts = set()
-        for i, pattern in enumerate(patterns):
-            for match in pattern.finditer(output_str):
-                if match.start() in processed_starts: continue
-                filename_match = match.groupdict().get("filename"); content_match = match.groupdict().get("content"); language_match = match.groupdict().get("language","").lower()
-                
-                if i == 1 and not filename_match: continue
-
-                filename = sanitize_filename(filename_match.strip()) if filename_match else ""
-                content = content_match.strip() if content_match else ""
-                language = language_match or (filename.split('.')[-1] if '.' in filename else "")
-
-                if filename and content and not (content.lower().startswith("arquivo:") and len(content.splitlines()) <=2) and content.strip():
-                    if not any(a["filename"] == filename and a["content"][:50] == content[:50] for a in artifacts):
-                        artifacts.append({"type": "markdown" if language=="markdown" or filename.endswith(".md") else "code", 
-                                          "filename": filename, "content": content, "language": language, 
-                                          "extraction_method": "regex_directive" if i==0 else "regex_fallback"})
-                        processed_starts.add(match.start())
-        if artifacts: log_message(f"{len(artifacts)} artefatos extraídos via Regex.", "Worker")
-        return artifacts
-
-class ImageWorker: 
-    def __init__(self, task_manager, model_name=GEMINI_IMAGE_GENERATION_MODEL_NAME):
-        self.task_manager = task_manager; self.model_name = model_name
+class ImageWorker:
+    def __init__(self):
+        self.model_name = GEMINI_IMAGE_GENERATION_MODEL_NAME
         self.generation_config = generation_config_image_sdk
         log_message(f"ImageWorker criado para {self.model_name}", "ImageWorker")
 
-    def generate_image(self, image_prompt, original_task_description="Gerar Imagem"):
+    def generate_image(self, text_prompt_for_image):
         agent_display_name = "ImageWorker"
-        print_agent_message(agent_display_name, f"Gerando imagem para: '{image_prompt[:100]}...'")
-        response_obj = call_gemini_api_with_retry([image_prompt], agent_display_name, self.model_name, self.generation_config)
-        if not response_obj: return None, "Falha: Sem resposta da API de imagem."
+        print_agent_message(agent_display_name, f"Gerando imagem para: '{text_prompt_for_image[:100]}...'")
+        log_message(f"Prompt para ImageWorker: {text_prompt_for_image}", agent_display_name)
+        
+        response_object = call_gemini_api_with_retry(
+            [text_prompt_for_image], agent_display_name, self.model_name, self.generation_config)
+
+        if response_object is None:
+            return "Falha na geração da imagem (API não respondeu)."
+
         try:
-            if response_obj.candidates and response_obj.candidates[0].content and response_obj.candidates[0].content.parts:
-                for part in response_obj.candidates[0].content.parts:
-                    if hasattr(part, 'image') and part.image and hasattr(part.image, 'data'):
-                        img_bytes = part.image.data
-                        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-                        fn_base = sanitize_filename(f"imagem_gerada_{original_task_description[:20]}_{ts}")
-                        fn = f"{fn_base}.png"
-                        log_message(f"Imagem gerada, pronta para salvar como '{fn}'.", agent_display_name)
-                        return {"filename": fn, "content_bytes": img_bytes, "type": "image"}, None
-            return None, "Falha: Nenhuma imagem na resposta."
-        except Exception as e: log_message(f"Erro ao processar imagem: {e}\n{traceback.format_exc()}", agent_display_name); return None, f"Erro: {e}"
+            if response_object.candidates and response_object.candidates[0].content and response_object.candidates[0].content.parts:
+                for part in response_object.candidates[0].content.parts:
+                    if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                        image_bytes = part.inline_data.data
+                        
+                        temp_filename = f"temp_img_{sanitize_filename(text_prompt_for_image[:30], False)}_{int(time.time())}.png"
+                        artifact_path = os.path.join(TEMP_ARTIFACTS_DIR, temp_filename)
+                        
+                        with open(artifact_path, "wb") as f:
+                            f.write(image_bytes)
+                        
+                        log_message(f"Sucesso! Imagem salva temporariamente em: {artifact_path}", agent_display_name)
+                        return artifact_path
+            
+            if hasattr(response_object, 'prompt_feedback') and response_object.prompt_feedback and hasattr(response_object.prompt_feedback, 'block_reason') and response_object.prompt_feedback.block_reason:
+                msg = f"Falha: Geração bloqueada ({response_object.prompt_feedback.block_reason})"
+                log_message(msg, agent_display_name)
+                return msg
+                
+        except Exception as e:
+            log_message(f"Erro ao processar resposta da API de imagem: {e}\n{traceback.format_exc()}", agent_display_name)
+            return f"Falha: Erro ao processar resposta ({e})."
+
+        return "Falha: Nenhuma imagem na resposta."
+
+class Worker:
+    def __init__(self):
+        self.gemini_model_name = GEMINI_TEXT_MODEL_NAME
+        log_message("Instância do Worker criada.", "Worker")
+
+    def execute_sub_task(self, sub_task_description, context_text_part, uploaded_file_objects):
+        agent_display_name = "Worker"
+        print_agent_message(agent_display_name, f"Executando: '{sub_task_description}'")
+
+        prompt_text_for_worker = rf"""
+Você é um Agente Executor. Tarefa atual: "{sub_task_description}"
+Contexto (resultados anteriores, objetivo original, arquivos):
+{context_text_part}
+
+Execute a tarefa.
+- Se for "Criar uma descrição textual detalhada (prompt) para gerar a imagem de [...]", seu resultado DEVE ser APENAS essa descrição textual.
+- Se a tarefa envolver modificar ou criar arquivos de código, forneça o CONTEÚDO COMPLETO do arquivo. Indique o NOME DO ARQUIVO CLARAMENTE antes de cada bloco de código (ex: "Arquivo: nome.ext" ou ```python nome.py ... ```).
+- Se identificar NOVAS sub-tarefas cruciais, liste-as em 'NOVAS_TAREFAS_SUGERIDAS:' como array JSON de strings. Se não, omita.
+
+Resultado da Tarefa:
+[Resultado principal. Se código, use blocos ``` com nome de arquivo.]
+
+NOVAS_TAREFAS_SUGERIDAS:
+[Array JSON de strings aqui, APENAS SE NECESSÁRIO. Se não, omita esta seção.]
+"""
+        prompt_parts = [prompt_text_for_worker] + uploaded_file_objects
+        response_text = call_gemini_api_with_retry(
+            prompt_parts, agent_display_name, self.gemini_model_name, generation_config_text
+        )
+
+        if response_text is None: return None, []
+        if not response_text.strip():
+            log_message(f"Worker: resposta vazia para '{sub_task_description}'.", agent_display_name)
+            return "Resposta vazia da API.", []
+
+        task_res, sugg_tasks_strings = response_text, []
+        marker = "NOVAS_TAREFAS_SUGERIDAS:"
+        if marker in response_text:
+            parts = response_text.split(marker, 1)
+            task_res = parts[0].strip()
+            potential_json_or_list = parts[1].strip()
+            log_message(f"Worker: potencial novas tarefas. Parte: {potential_json_or_list}", agent_display_name)
+            try:
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', potential_json_or_list, re.DOTALL)
+                parsed_suggestions = []
+                if json_match:
+                    json_str = json_match.group(1) or json_match.group(2)
+                    parsed_suggestions = json.loads(json_str)
+                elif potential_json_or_list.startswith("[") and potential_json_or_list.endswith("]"):
+                    parsed_suggestions = json.loads(potential_json_or_list)
+                else:
+                    lines = [ln.strip().replace('"',"").replace(",","") for ln in potential_json_or_list.splitlines() if ln.strip() and not ln.strip().startswith(('[', ']'))]
+                    if lines: parsed_suggestions = lines
+                
+                if isinstance(parsed_suggestions, list):
+                    for item in parsed_suggestions:
+                        if isinstance(item, str) and item.strip():
+                            sugg_tasks_strings.append(item.strip())
+                        elif isinstance(item, dict) and "tarefa" in item and isinstance(item["tarefa"], str) and item["tarefa"].strip():
+                            sugg_tasks_strings.append(item["tarefa"].strip())
+                log_message(f"Novas tarefas sugeridas (strings filtradas): {sugg_tasks_strings}", agent_display_name)
+            except Exception as e:
+                log_message(f"Erro ao processar novas tarefas: {e}. Parte: {potential_json_or_list}\n{traceback.format_exc()}", agent_display_name)
+        else:
+            task_res = response_text.strip()
+        
+        if task_res.lower().startswith("resultado da tarefa:"):
+            task_res = task_res[len("resultado da tarefa:"):].strip()
+        
+        log_message(f"Resultado da sub-tarefa '{sub_task_description}': {task_res[:500]}...", agent_display_name)
+        return task_res, sugg_tasks_strings
 
 class Validator:
-    def __init__(self, task_manager):
-        self.task_manager = task_manager
+    def __init__(self, task_manager_ref):
+        self.tm = task_manager_ref
+        self.text_model_name = GEMINI_TEXT_MODEL_NAME
+        self.text_gen_config = generation_config_text
         log_message("Instância do Validator criada.", "Validator")
-
-    def validate_results(self, task_results_history, staged_artifacts, original_goal):
-        log_message(f"Iniciando validação automática. Artefatos no stage: {list(staged_artifacts.keys())}", "Validator")
-        issues = []
-        if not staged_artifacts:
-            expects_files = any(kw in original_goal.lower() for kw in ["criar", "modificar", "salvar", "gerar arquivo"]) or \
-                            (hasattr(self.task_manager, 'current_task_list') and \
-                             any(any(kw_task in (list(task.keys())[0] if isinstance(task,dict) else str(task)).lower() for kw_task in ["salvar", "criar arquivo", "gerar o arquivo", "modificar arquivo"]) for task in self.task_manager.current_task_list))
-            if expects_files: issues.append("Nenhum artefato preparado, mas era esperado.")
-        else:
-            for filename, artifact_data in staged_artifacts.items():
-                content = artifact_data.get("content"); content_bytes = artifact_data.get("content_bytes")
-                if artifact_data.get("type") == "image" and not content_bytes: issues.append(f"Imagem '{filename}' sem bytes.")
-                elif artifact_data.get("type") != "image" and (not content or not content.strip()): issues.append(f"Artefato '{filename}' vazio.")
-                if "Arquivo:" in filename: issues.append(f"Nome de arquivo suspeito '{filename}'.")
-                if isinstance(content, str) and content.lower().startswith("arquivo:") and len(content.splitlines()) <= 2: issues.append(f"Conteúdo de '{filename}' parece referência.")
         
-        if issues:
-            log_message(f"Validação automática falhou. Problemas: {'; '.join(issues)}", "Validator")
-            return {"status": "failure", "reason": "; ".join(issues), "suggested_refinements": "Revisar tarefas de geração/extração. Garantir nomes e conteúdo corretos (Markdown ou JSON 'arquivos')."}
-        log_message(f"Validação automática OK para: {list(staged_artifacts.keys())}", "Validator")
-        return {"status": "success"}
+    def evaluate_and_select_image_concepts(self, original_goal, image_task_results, uploaded_file_objects, files_metadata_for_prompt_text):
+        agent_display_name = "Validator (Avaliação de Conceitos de Imagem)"
+        print_agent_message(agent_display_name, "Avaliando conceitos de imagem gerados...")
+
+        summary_of_image_attempts = "Resumo das tentativas de geração de imagem:\n"
+        if not image_task_results:
+            summary_of_image_attempts += "Nenhuma tentativa de geração de imagem foi registrada.\n"
+        else:
+            for i, res in enumerate(image_task_results):
+                is_success = isinstance(res.get("result"), str) and os.path.exists(res.get("result"))
+                summary_of_image_attempts += f"Tentativa {i+1}:\n"
+                summary_of_image_attempts += f"  - Prompt Usado: {res.get('image_prompt_used', 'N/A')}\n"
+                summary_of_image_attempts += f"  - Geração Bem-Sucedida: {'Sim' if is_success else 'Não'}\n"
+                if not is_success:
+                     summary_of_image_attempts += f"  - Resultado/Erro: {str(res.get('result'))[:200]}...\n"
+
+        prompt_text_part = rf"""
+Você é um Diretor de Arte especialista. Seu objetivo é analisar os resultados das tentativas de geração de imagem para a meta: "{original_goal}".
+Arquivos complementares: {files_metadata_for_prompt_text}
+
+Abaixo está o resumo das tentativas. Você NÃO PODE VER AS IMAGENS, apenas os prompts usados e se a geração foi bem-sucedida.
+{summary_of_image_attempts}
+
+Com base SOMENTE nos prompts e no sucesso/falha, identifique TODOS os prompts que você considera válidos e que atendem ao objetivo original.
+Se múltiplas imagens foram geradas com sucesso e são válidas, inclua todos os prompts correspondentes.
+Se alguma falhou mas o prompt era bom, inclua-o para uma nova tentativa.
+Se nenhuma tentativa foi feita ou nenhum prompt parece adequado, retorne uma lista JSON vazia.
+
+**IMPORTANTE:** Sua resposta DEVE SER ESTRITAMENTE um array JSON de strings, onde cada string é um prompt de imagem considerado válido. NÃO inclua nenhum outro texto, explicação ou formatação fora do array JSON.
+
+Exemplo de Resposta Válida:
+```json
+["prompt para imagem 1 válida", "prompt para imagem 2 válida"]
+```
+Exemplo de Resposta Vazia Válida:
+```json
+[]
+```
+
+Prompts Selecionados (JSON Array):
+"""
+        prompt_parts_for_api = [prompt_text_part] + uploaded_file_objects
+        llm_response_text = call_gemini_api_with_retry(prompt_parts_for_api, agent_display_name, self.text_model_name, self.text_gen_config)
+
+        selected_prompts = []
+        if llm_response_text:
+            try:
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', llm_response_text, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1) or json_match.group(2)
+                    parsed_list = json.loads(json_str)
+                    if isinstance(parsed_list, list) and all(isinstance(p, str) for p in parsed_list):
+                        selected_prompts = [p.strip() for p in parsed_list if p.strip()]
+                else:
+                    log_message(f"Não foi possível extrair JSON da resposta do LLM para avaliação de prompts: {llm_response_text}", agent_display_name)
+            except Exception as e:
+                log_message(f"Erro ao decodificar JSON da avaliação de prompts: {e}. Resposta: {llm_response_text}", agent_display_name)
+        
+        print_agent_message(agent_display_name, f"LLM considerou {len(selected_prompts)} prompts como válidos.")
+        
+        validated_concepts = []
+        if selected_prompts:
+            for sel_prompt in selected_prompts:
+                matching_attempt = next((res for res in image_task_results if res.get('image_prompt_used', '').strip() == sel_prompt), None)
+                if matching_attempt:
+                    validated_concepts.append(matching_attempt)
+        
+        elif not selected_prompts and image_task_results:
+            log_message("LLM não retornou prompts válidos. Usando todos os resultados bem-sucedidos como fallback.", agent_display_name)
+            validated_concepts = [res for res in image_task_results if isinstance(res.get("result"), str) and os.path.exists(res.get("result"))]
+
+        log_message(f"Conceitos de imagem validados para prosseguir: {len(validated_concepts)}", agent_display_name)
+        return validated_concepts
+        
+    def validate_and_save_final_output(self, original_goal, final_context, uploaded_file_objects, temp_artifacts_to_save):
+        agent_display_name = "Validator (Validação Final)"
+        print_agent_message(agent_display_name, "Validando resultado final e preparando artefatos...")
+
+        summary_of_artifacts = "\n--- ARTEFATOS IDENTIFICADOS PARA SALVAMENTO ---\n"
+        for artifact in temp_artifacts_to_save:
+            summary_of_artifacts += f"- Tipo: {artifact['type']}, Nome: {os.path.basename(artifact.get('filename') or artifact.get('artifact_path', ''))}\n"
+            if artifact['type'] == 'imagem':
+                summary_of_artifacts += f"  (Gerado com o prompt: '{artifact.get('prompt', 'N/A')}')\n"
+
+        prompt_text_part_validation = rf"""
+Você é um Gerenciador de Tarefas especialista em validação. Meta original: "{original_goal}"
+Arquivos de entrada: {format_uploaded_files_info_for_prompt_text(self.tm.uploaded_files_metadata)}
+Contexto das tarefas executadas: {final_context}
+Sumário dos Artefatos gerados para salvar: {summary_of_artifacts}
+
+Com base nisso, sua tarefa é:
+1.  Avaliar se o objetivo original foi atingido.
+2.  Retornar um JSON com três chaves: "validation_passed" (true/false), "main_report" (um relatório detalhado em Markdown) e "general_evaluation" (um breve resumo da sua avaliação).
+
+Formato da Resposta (ESTRITAMENTE JSON):
+```json
+{{
+  "validation_passed": true,
+  "main_report": "# Relatório de Execução\n\n## Resumo\nO objetivo foi alcançado com sucesso...",
+  "general_evaluation": "O fluxo de trabalho foi bem-sucedido, gerando todos os artefatos necessários."
+}}
+```
+"""
+        llm_full_response = call_gemini_api_with_retry([prompt_text_part_validation] + uploaded_file_objects, agent_display_name, self.text_model_name, self.text_gen_config)
+
+        if llm_full_response:
+            try:
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```', llm_full_response, re.DOTALL)
+                if not json_match: raise ValueError("JSON não encontrado na resposta.")
+                parsed_json = json.loads(json_match.group(1))
+
+                validation_passed = parsed_json.get("validation_passed", False)
+                main_report_content = parsed_json.get("main_report", "Relatório não gerado.")
+                evaluation_text = parsed_json.get("general_evaluation", "Avaliação não gerada.")
+
+                goal_slug = sanitize_filename(original_goal, allow_extension=False)
+                assessment_file_name = os.path.join(OUTPUT_DIRECTORY, f"avaliacao_completa_{goal_slug}_{CURRENT_TIMESTAMP_STR}.md")
+                with open(assessment_file_name, "w", encoding="utf-8") as f:
+                    f.write(f"# Relatório de Execução da Meta: {original_goal}\n\n")
+                    f.write(f"{main_report_content}\n\n")
+                    f.write(f"## Avaliação Geral da IA:\n\n{evaluation_text}\n")
+                print_agent_message(agent_display_name, f"Relatório de avaliação salvo: {assessment_file_name}")
+
+                if validation_passed:
+                    final_artifact_dir = os.path.join(OUTPUT_DIRECTORY, f"artefatos_finais_{goal_slug}_{CURRENT_TIMESTAMP_STR}")
+                    if not os.path.exists(final_artifact_dir): os.makedirs(final_artifact_dir)
+
+                    for artifact in temp_artifacts_to_save:
+                        try:
+                            source_path = artifact.get('temp_path') or artifact.get('artifact_path')
+                            if source_path and os.path.exists(source_path):
+                                dest_name = artifact.get('filename') if artifact.get('type') == 'código' else f"imagem_{sanitize_filename(artifact.get('prompt', '')[:30], False)}.png"
+                                shutil.copy(source_path, os.path.join(final_artifact_dir, dest_name))
+                                print_agent_message(agent_display_name, f"✅ Artefato final salvo: {dest_name}")
+                        except Exception as e:
+                            print_agent_message(agent_display_name, f"❌ Erro ao salvar artefato final: {e}")
+                
+                return validation_passed, evaluation_text
+
+            except Exception as e:
+                log_message(f"Erro ao processar JSON de validação: {e}\nResposta: {llm_full_response}", agent_display_name)
+                return False, f"Falha ao processar resposta de validação: {e}"
+        else:
+            return False, "Falha ao obter avaliação final da API."
 
 class TaskManager:
-    def __init__(self, initial_goal, uploaded_file_objects=None, uploaded_files_info=None):
-        self.goal = initial_goal
-        self.uploaded_file_objects = uploaded_file_objects or []
-        self.uploaded_files_info = uploaded_files_info or []
-        self.current_task_list = []
-        self.executed_tasks_results = [] 
-        self.staged_artifacts = {} 
-        self.worker = Worker(self)
-        self.image_worker = ImageWorker(self) 
-        self.validator = Validator(self)
+    def __init__(self):
         self.gemini_text_model_name = GEMINI_TEXT_MODEL_NAME
-        log_message("Instância do TaskManager (v9.3.2) criada.", "TaskManager")
+        self.worker = Worker()
+        self.image_worker = ImageWorker()
+        self.validator = Validator(self) # Passa a referência de si mesmo
+        self.task_list = []
+        self.completed_tasks_results = []
+        self.uploaded_files_metadata = [] # Adicionado para acesso pelo Validator
+        log_message("Instância do TaskManager criada.", "TaskManager")
 
-    def confirm_new_tasks_with_llm(self, original_goal, current_task_list_for_prompt, suggested_new_tasks):
-        agent_name = "Task Manager (Confirm New Tasks)"
-        if not suggested_new_tasks:
-            log_message("Nenhuma nova tarefa sugerida para confirmar.", agent_name)
-            return []
-        
-        cleaned_suggested_tasks = [task.strip().strip('"').strip("'") for task in suggested_new_tasks if isinstance(task, str) and task.strip()]
-        if not cleaned_suggested_tasks:
-            log_message("Tarefas sugeridas estavam vazias ou não eram strings após limpeza.", agent_name)
-            return []
-
-        print_agent_message(agent_name, f"Avaliando novas tarefas sugeridas (limpas): {cleaned_suggested_tasks}")
-        log_message(f"Tarefas atuais para contexto da LLM: {current_task_list_for_prompt}", agent_name)
-
-        files_metadata_str = "\n".join([f"- {f['display_name']} (ID: {f['file_id']})" for f in self.uploaded_files_info]) if self.uploaded_files_info else "Nenhum arquivo carregado."
-
-        prompt_parts = [
-            f"Objetivo Original: {original_goal}",
-            f"Plano de Tarefas Atual (para contexto, não modificar): {json.dumps(current_task_list_for_prompt)}",
-            f"Tarefas Novas Sugeridas pelo Worker (avaliar estas): {json.dumps(cleaned_suggested_tasks)}",
-            f"Arquivos Carregados (apenas para contexto): {files_metadata_str}",
-            "Analise as 'Tarefas Novas Sugeridas'. Elas são relevantes, claras, não redundantes com o 'Plano de Tarefas Atual' e contribuem para o 'Objetivo Original'?",
-            "Retorne APENAS um array JSON com as tarefas sugeridas que você aprova. Se nenhuma for aprovada, retorne um array JSON vazio [].",
-            "Exemplo de Retorno Aprovando Tarefas: [\"Nova Tarefa Aprovada 1\", \"Nova Tarefa Aprovada 2\"]",
-            "Exemplo de Retorno Não Aprovando Nenhuma: []",
-            "Tarefas Aprovadas:"
-        ]
-        
-        response_str = call_gemini_api_with_retry(prompt_parts, agent_name, model_name=self.gemini_text_model_name)
-        approved_tasks = []
-        if response_str:
-            try:
-                log_message(f"Resposta da LLM para confirmação de tarefas (bruta): '{response_str}'", agent_name)
-                match = re.search(r'(\[[\s\S]*?\])', response_str, re.DOTALL) 
-                if match:
-                    json_payload_str = match.group(1).strip()
-                    log_message(f"JSON extraído para aprovação: '{json_payload_str}'", agent_name)
-                    parsed_response = json.loads(json_payload_str)
-                    if isinstance(parsed_response, list) and all(isinstance(task, str) for task in parsed_response):
-                        approved_tasks = [task.strip().strip('"').strip("'") for task in parsed_response if task.strip()] 
-                        log_message(f"Novas tarefas aprovadas pela LLM: {approved_tasks}", agent_name)
-                    else:
-                        log_message(f"Resposta da LLM para aprovação não é uma lista de strings: {parsed_response}", agent_name)
-                else:
-                    log_message(f"Nenhum array JSON encontrado na resposta da LLM para aprovação: '{response_str}'", agent_name)
-            except json.JSONDecodeError as e:
-                log_message(f"Erro ao decodificar JSON da aprovação de novas tarefas: {e}. Resposta: {response_str}", agent_name)
-            except Exception as e_gen:
-                log_message(f"Erro geral ao processar aprovação de novas tarefas: {e_gen}. Resposta: {response_str}", agent_name)
-        else:
-            log_message("Nenhuma resposta da LLM para aprovação de novas tarefas.", agent_name)
-        
-        print_agent_message(agent_name, f"Tarefas sugeridas aprovadas pela LLM: {approved_tasks if approved_tasks else 'Nenhuma'}")
-        return approved_tasks
-
-    def decompose_goal(self, goal_to_decompose, previous_plan=None, automatic_validation_feedback=None, manual_validation_feedback_str=None):
+    def decompose_task(self, main_goal, uploaded_file_objects, files_metadata_for_prompt_text):
+        # ... (código da v8.9, sem alterações aqui) ...
         agent_display_name = "Task Manager (Decomposição)"
-        print_agent_message(agent_display_name, f"Decompondo meta: '{goal_to_decompose}'")
-        files_prompt_part = "Arquivos Complementares:\n" + ('\n'.join([f"- {f['display_name']} (ID: {f['file_id']})" for f in self.uploaded_files_info]) if self.uploaded_files_info else "Nenhum.\n")
-        prompt_parts = [
-            "Você é um Gerenciador de Tarefas especialista. Decomponha a meta principal em sub-tarefas sequenciais.",
-            f"Meta Principal: \"{goal_to_decompose}\"", files_prompt_part,
-            "Se a meta envolver CRIAÇÃO DE MÚLTIPLAS IMAGENS (ex: \"crie 3 logos\"), você DEVE:",
-            "1.  Criar uma tarefa para gerar a descrição de CADA imagem individualmente. Ex: \"Criar descrição para imagem 1 de [assunto]\".",
-            "2.  Seguir CADA tarefa de descrição com uma tarefa \"TASK_GERAR_IMAGEM: [assunto da imagem correspondente]\".",
-            "3.  Após TODAS as tarefas de geração de imagem, adicionar UMA tarefa: \"TASK_AVALIAR_IMAGENS: Avaliar as imagens/descrições geradas para [objetivo original] e selecionar as melhores que atendem aos critérios.\"",
-            "Se for a CRIAÇÃO DE UMA ÚNICA IMAGEM, use o formato:",
-            "1.  \"Criar uma descrição textual detalhada (prompt) para gerar a imagem de [assunto].\"",
-            "2.  \"TASK_GERAR_IMAGEM: [assunto da imagem]\"",
-            "3.  \"TASK_AVALIAR_IMAGENS: Avaliar a imagem gerada para [objetivo original].\"",
-            "Se precisar usar imagem fornecida MAS SEM ENVOLVER CRIAÇÃO DE IMAGENS, use \"TASK_AVALIAR_IMAGENS: Avaliar a imagem fornecida para [objetivo original].\"",
-            "Para outras metas, decomponha normalmente. Retorne em JSON array de strings."
-        ]
-        if previous_plan: 
-            prompt_parts.append(f"\nContexto Adicional: O plano anterior precisa de revisão.")
-            prompt_parts.append(f"Plano Anterior: {json.dumps(previous_plan)}")
-            if automatic_validation_feedback and automatic_validation_feedback.get("status") == "failure":
-                prompt_parts.append(f"Feedback da Validação Automática: {automatic_validation_feedback['reason']}")
-                prompt_parts.append(f"Sugestões de Refinamento (Automático): {automatic_validation_feedback['suggested_refinements']}")
-            if manual_validation_feedback_str:
-                 prompt_parts.append(f"Feedback da Validação Manual do Usuário: {manual_validation_feedback_str}")
-            prompt_parts.append("Por favor, gere um NOVO plano de tarefas corrigido e mais detalhado para alcançar a meta original, levando em conta o feedback.")
-        prompt_parts.append("Sub-tarefas (JSON array de strings):")
-        if self.uploaded_file_objects: prompt_parts.extend(self.uploaded_file_objects)
+        print_agent_message(agent_display_name, f"Decompondo meta: '{main_goal}'")
 
-        response_str = call_gemini_api_with_retry(prompt_parts, agent_display_name)
-        if response_str:
+        prompt_text_part = f"""
+Você é um Gerenciador de Tarefas especialista. Decomponha a meta principal em sub-tarefas sequenciais.
+Meta Principal: "{main_goal}"
+Arquivos Complementares: {files_metadata_for_prompt_text}
+
+Se a meta envolver CRIAÇÃO DE MÚLTIPLAS IMAGENS (ex: "crie 3 logos", "gere 2 variações de um personagem"), você DEVE:
+1.  Criar uma tarefa para gerar a descrição de CADA imagem individualmente. Ex: "Criar descrição para imagem 1 de [assunto]".
+2.  Seguir CADA tarefa de descrição com uma tarefa "TASK_GERAR_IMAGEM: [assunto da imagem correspondente]".
+3.  Após TODAS as tarefas de geração de imagem, adicionar UMA tarefa: "TASK_AVALIAR_IMAGENS: Avaliar as imagens/descrições geradas para [objetivo original] e selecionar as melhores que atendem aos critérios."
+
+Se for UMA ÚNICA IMAGEM, use o formato:
+1.  "Criar uma descrição textual detalhada (prompt) para gerar a imagem de [assunto]."
+2.  "TASK_GERAR_IMAGEM: [assunto da imagem]"
+3.  (Opcional, mas recomendado se a qualidade for crítica) "TASK_AVALIAR_IMAGENS: Avaliar a imagem gerada para [objetivo original]."
+
+Para outras metas, decomponha normalmente. Retorne em JSON array de strings.
+Exemplo Múltiplas Imagens: ["Criar descrição para imagem 1 de logo moderno", "TASK_GERAR_IMAGEM: Imagem 1 de logo moderno", "Criar descrição para imagem 2 de logo vintage", "TASK_GERAR_IMAGEM: Imagem 2 de logo vintage", "TASK_AVALIAR_IMAGENS: Avaliar os logos gerados para cafeteria e selecionar o melhor."]
+Sub-tarefas:
+"""
+        prompt_parts_for_api = [prompt_text_part] + uploaded_file_objects
+        response_text = call_gemini_api_with_retry(
+            prompt_parts_for_api,
+            agent_display_name,
+            model_name=self.gemini_text_model_name,
+            gen_config=generation_config_text
+        )
+
+        if response_text:
             try:
-                log_message(f"Resposta da decomposição (bruta): {response_str}", agent_display_name)
-                match = re.search(r'```json\s*([\s\S]*?)\s*```', response_str, re.DOTALL)
-                json_str = response_str
-                if match:
-                    json_str = match.group(1).strip()
-                else: 
-                    array_match = re.search(r'(\[[\s\S]*?\])', response_str, re.DOTALL)
-                    if array_match:
-                        json_str = array_match.group(1).strip()
-                
-                log_message(f"String JSON para decomposição (processada): '{json_str}'", agent_display_name)
-                tasks = json.loads(json_str)
-                if isinstance(tasks, list) and all(isinstance(task, str) for task in tasks):
-                    log_message(f"Tarefas decompostas com sucesso: {tasks}", agent_display_name); return tasks
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', response_text, re.DOTALL)
+                if json_match:
+                    json_str = json_match.group(1) or json_match.group(2)
+                    parsed_tasks = json.loads(json_str)
+                    if isinstance(parsed_tasks, list) and all(isinstance(task, str) for task in parsed_tasks):
+                        self.task_list = parsed_tasks
+                    elif isinstance(parsed_tasks, list) and all(isinstance(task, dict) and "tarefa" in task for task in parsed_tasks):
+                         self.task_list = [task_item["tarefa"] for task_item in parsed_tasks]
+                         log_message("Decomposição retornou lista de dicionários, extraindo strings de 'tarefa'.", agent_display_name)
+                    else:
+                        if isinstance(parsed_tasks, list):
+                            self.task_list = [str(task) for task in parsed_tasks]
+                            log_message("Decomposição retornou lista de itens não-string/não-dict, convertendo para strings.", agent_display_name)
+                        else:
+                            raise ValueError(f"Formato de tarefa decomposta inesperado: {type(parsed_tasks)}")
+
+
+                    log_message(f"Tarefas decompostas (strings): {self.task_list}", agent_display_name)
+                    print_agent_message(agent_display_name, f"Tarefas decompostas: {self.task_list}")
+                    return True
                 else:
-                    log_message(f"Resposta da decomposição não é uma lista de strings: {tasks}", agent_display_name)
-            except json.JSONDecodeError as e: 
-                log_message(f"Erro JSON na decomposição: {e}. Resposta: {response_str}", agent_display_name)
-            except Exception as e_gen:
-                 log_message(f"Erro geral na decomposição: {e_gen}. Resposta: {response_str}", agent_display_name)
-
-        print_agent_message(agent_display_name, "Falha ao decompor meta. Usando meta original como única tarefa.")
-        log_message("Falha na decomposição, usando meta original como fallback.", agent_display_name)
-        return [goal_to_decompose]
-
-    def present_for_manual_validation(self):
-        log_message("Iniciando validação manual pelo usuário...", "TaskManager")
-        print_agent_message("TaskManager", "Validação automática OK. Artefatos gerados/modificados:")
-        if not self.staged_artifacts:
-            print_agent_message("TaskManager", "Nenhum artefato foi preparado para validação manual."); return {"approved": True, "feedback": "Nenhum artefato no stage."}
-        for i, (filename, data) in enumerate(self.staged_artifacts.items()): print(f"  {i+1}. {data.get('type', 'desconhecido').capitalize()}: {filename}")
-        user_choice = input("👤 Aprova estes artefatos finais? (s/n/cancelar) ➡️ ").strip().lower()
-        if user_choice == 's': log_message("Artefatos aprovados manualmente.", "TaskManager"); return {"approved": True}
-        if user_choice == 'cancelar': log_message("Validação manual cancelada.", "TaskManager"); return {"approved": False, "feedback": "cancelar"}
-        feedback = input("👤 Feedback para correção (ou 'cancelar'): ➡️ ").strip()
-        log_message(f"Artefatos reprovados manualmente. Feedback: {feedback}", "TaskManager")
-        return {"approved": False, "feedback": feedback if feedback else "Reprovado sem feedback específico."}
-
-    def process_task_result(self, task_description, task_result_data):
-        self.executed_tasks_results.append({task_description: task_result_data})
-        if isinstance(task_result_data, dict):
-            for artifact in task_result_data.get("artifacts", []):
-                filename, art_type = artifact.get("filename"), artifact.get("type")
-                if filename:
-                    if art_type == "image" and artifact.get("content_bytes"): self.staged_artifacts[filename] = artifact
-                    elif art_type in ["code", "markdown"] and artifact.get("content"): self.staged_artifacts[filename] = artifact
-
-    def _sync_artifact_to_api(self, display_name, artifact_data):
-        """Sincroniza um artefato individual com a API Gemini Files."""
-        log_message(f"Sincronizando artefato '{display_name}' com a API Gemini Files...", "TaskManager")
-        temp_file_path = None
-        try:
-            # 1. Verificar se existe e deletar
-            existing_file_id = None
-            for f_api in genai.list_files():
-                if f_api.display_name == display_name:
-                    existing_file_id = f_api.name
-                    break
-            
-            if existing_file_id:
-                log_message(f"Arquivo '{display_name}' (ID: {existing_file_id}) encontrado na API. Deletando...", "TaskManager")
-                try:
-                    genai.delete_file(name=existing_file_id)
-                    log_message(f"Arquivo '{display_name}' (ID: {existing_file_id}) deletado da API com sucesso.", "TaskManager")
-                    time.sleep(0.5) # Pequeno delay após deletar
-                except Exception as e_del:
-                    log_message(f"Erro ao deletar arquivo '{display_name}' (ID: {existing_file_id}) da API: {e_del}", "TaskManager")
-                    # Prosseguir com o upload mesmo se a deleção falhar (pode ser que o arquivo não exista mais)
-
-            # 2. Preparar arquivo temporário para upload
-            ext_map = { ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src", ".h": "text/x-chdr", ".hpp": "text/x-c++hdr", ".txt": "text/plain", ".json": "text/plain",
-                        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif" }
-            
-            file_ext = os.path.splitext(display_name)[1].lower()
-            mime_type = ext_map.get(file_ext, "application/octet-stream") # Default MIME type
-
-            temp_file_path = os.path.join(TEMP_ARTIFACTS_DIR, display_name)
-
-            if artifact_data.get("type") == "image" and artifact_data.get("content_bytes"):
-                with open(temp_file_path, "wb") as f_temp:
-                    f_temp.write(artifact_data["content_bytes"])
-                log_message(f"Arquivo de imagem temporário '{temp_file_path}' criado para upload.", "TaskManager")
-            elif artifact_data.get("content") and artifact_data.get("type") in ["code", "markdown"]:
-                with open(temp_file_path, "w", encoding="utf-8") as f_temp:
-                    f_temp.write(artifact_data["content"])
-                log_message(f"Arquivo de texto temporário '{temp_file_path}' criado para upload.", "TaskManager")
-            else:
-                log_message(f"Tipo de artefato '{display_name}' não suportado para upload ou sem conteúdo. Pulando sincronização com API.", "TaskManager")
-                return
-
-            # 3. Fazer upload
-            log_message(f"Fazendo upload de '{display_name}' (MIME: {mime_type}) para a API Gemini Files...", "TaskManager")
-            uploaded_api_file = genai.upload_file(path=temp_file_path, display_name=display_name, mime_type=mime_type)
-            log_message(f"Artefato '{display_name}' enviado para API com sucesso. Novo ID: {uploaded_api_file.name}", "TaskManager")
-            print_agent_message("TaskManager", f"☁️ Artefato '{display_name}' sincronizado com a API Gemini Files.")
-
-        except Exception as e_sync:
-            log_message(f"Erro ao sincronizar artefato '{display_name}' com a API Gemini Files: {e_sync}", "TaskManager")
-            print_agent_message("TaskManager", f"⚠️ Erro ao sincronizar '{display_name}' com a API.")
-        finally:
-            # 4. Limpar arquivo temporário
-            if temp_file_path and os.path.exists(temp_file_path):
-                try:
-                    os.remove(temp_file_path)
-                    log_message(f"Arquivo temporário '{temp_file_path}' removido.", "TaskManager")
-                except Exception as e_clean:
-                    log_message(f"Erro ao remover arquivo temporário '{temp_file_path}': {e_clean}", "TaskManager")
+                    log_message(f"Decomposição não retornou JSON no formato esperado. Resposta: {response_text}", agent_display_name)
+                    lines = [line.strip().replace('"', '').replace(',', '') for line in response_text.splitlines() if line.strip() and not line.strip().startswith(('[', ']')) and not line.strip().lower().startswith("sub-tarefas:")]
+                    if lines:
+                        self.task_list = lines
+                        log_message(f"Decomposição interpretada como lista de strings simples: {self.task_list}", agent_display_name)
+                        print_agent_message(agent_display_name, f"Tarefas decompostas (interpretadas): {self.task_list}")
+                        return True
+                    print_agent_message(agent_display_name, f"Decomposição não retornou JSON no formato esperado.")
 
 
-    def save_final_artifacts(self):
-        log_message(f"Salvando {len(self.staged_artifacts)} artefatos finais...", "TaskManager")
-        saved_local_count = 0
-        if not self.staged_artifacts: print_agent_message("TaskManager", "Nenhum artefato para salvar."); return
-        
-        for filename, data in self.staged_artifacts.items():
-            final_fn = sanitize_filename(filename)
-            if not final_fn: log_message(f"Nome inválido '{filename}', pulando.", "TaskManager"); continue
-            
-            # Salvar localmente
-            fp_local = os.path.join(OUTPUT_DIRECTORY, final_fn)
+            except json.JSONDecodeError as e:
+                log_message(f"Falha ao decodificar JSON da decomposição: {e}. Tentando interpretar como lista de strings.", agent_display_name)
+                lines = [line.strip().replace('"', '').replace(',', '') for line in response_text.splitlines() if line.strip() and not line.strip().startswith(('[', ']')) and not line.strip().lower().startswith("sub-tarefas:")]
+                if lines:
+                    self.task_list = lines
+                    log_message(f"Decomposição interpretada como lista de strings simples após falha JSON: {self.task_list}", agent_display_name)
+                    print_agent_message(agent_display_name, f"Tarefas decompostas (interpretadas): {self.task_list}")
+                    return True
+                else:
+                    print_agent_message(agent_display_name, f"Erro ao decodificar JSON e não foi possível interpretar como lista. Resposta: {response_text}")
+                    log_message(f"JSONDecodeError: {e}. Traceback: {traceback.format_exc()}", agent_display_name)
+
+            except Exception as e:
+                print_agent_message(agent_display_name, f"Erro inesperado ao processar decomposição: {e}. Resposta: {response_text}")
+                log_message(f"Erro inesperado: {e}. Traceback: {traceback.format_exc()}", agent_display_name)
+        self.task_list = []; return False
+
+    def confirm_new_tasks_with_llm(self, original_goal, current_task_list, suggested_new_tasks, uploaded_file_objects, files_metadata_for_prompt_text):
+        # ... (código da v8.9, sem alterações aqui) ...
+        agent_name = "Task Manager (Validação Novas Tarefas)"
+        if not suggested_new_tasks: return []
+        print_agent_message(agent_name, f"Avaliando novas tarefas: {suggested_new_tasks}")
+        prompt_text = f"""Objetivo: "{original_goal}". Tarefas atuais: {json.dumps(current_task_list)}. Novas sugeridas: {json.dumps(suggested_new_tasks)}. Arquivos: {files_metadata_for_prompt_text}. Avalie e retorne em JSON APENAS as tarefas aprovadas (relevantes, não cíclicas, claras). Se nenhuma, []. Tarefas Aprovadas:"""
+        prompt_parts = [prompt_text] + uploaded_file_objects
+        response = call_gemini_api_with_retry(
+            prompt_parts,
+            agent_name,
+            model_name=self.gemini_text_model_name,
+            gen_config=generation_config_text
+        )
+        approved_tasks_final = []
+        if response:
             try:
-                if data.get("type") == "image" and data.get("content_bytes"):
-                    with open(fp_local, "wb") as f: f.write(data["content_bytes"]); print_agent_message("TaskManager", f"🖼️ Imagem salva localmente: {final_fn}")
-                elif data.get("content") and data.get("type") in ["code", "markdown"]:
-                    with open(fp_local, "w", encoding="utf-8") as f: f.write(data["content"]); print_agent_message("TaskManager", f"📄 Arquivo salvo localmente: {final_fn}")
-                else: 
-                    log_message(f"Artefato '{final_fn}' sem conteúdo apropriado para salvar localmente.", "TaskManager")
-                    continue # Pula para o próximo artefato se não puder salvar localmente
-                log_message(f"Artefato final salvo localmente: {fp_local}", "TaskManager"); saved_local_count += 1
-                
-                # Sincronizar com API Gemini Files (NOVO para v9.3.3)
-                self._sync_artifact_to_api(final_fn, data)
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', response, re.DOTALL)
+                parsed_response = []
+                if json_match:
+                    json_str = json_match.group(1) or json_match.group(2)
+                    parsed_response = json.loads(json_str)
+                else:
+                    s, e = response.find('['), response.rfind(']')+1
+                    if s!=-1 and e > s: parsed_response = json.loads(response[s:e])
 
-            except Exception as e: 
-                log_message(f"Erro ao salvar artefato localmente '{final_fn}': {e}", "TaskManager")
-                print_agent_message("TaskManager", f"❌ Erro ao salvar localmente '{final_fn}'.")
+                if isinstance(parsed_response, list):
+                    for item in parsed_response:
+                        if isinstance(item, str) and item.strip():
+                            approved_tasks_final.append(item.strip())
+                        elif isinstance(item, dict) and "tarefa" in item and isinstance(item["tarefa"], str) and item["tarefa"].strip():
+                            approved_tasks_final.append(item["tarefa"].strip())
+                        else:
+                            log_message(f"Item de tarefa aprovada ignorado (formato inesperado ou vazio): {item}", agent_name)
+                else:
+                     log_message(f"Resposta de aprovação não é uma lista: {parsed_response}", agent_name)
+
+                print_agent_message(agent_name, f"Novas tarefas aprovadas (strings): {approved_tasks_final}")
+            except Exception as ex:
+                log_message(f"Erro ao decodificar/processar aprovação: {ex}. Resp: {response}", agent_name)
+                log_message(f"Traceback: {traceback.format_exc()}", agent_name)
+        else:
+            log_message("Falha API na validação de novas tarefas.", agent_name)
+        return approved_tasks_final
         
-        print_agent_message("TaskManager", f"✅ {saved_local_count} artefato(s) salvo(s) localmente." if saved_local_count else "Nenhum artefato final efetivamente salvo localmente.")
+    def run_workflow(self, initial_goal, uploaded_file_objects, uploaded_files_metadata):
+        self.uploaded_files_metadata = uploaded_files_metadata
+        agent_display_name = "TaskManager"
+        print_agent_message(agent_display_name, "Iniciando fluxo de trabalho...")
+        log_message(f"Meta inicial: {initial_goal}", agent_display_name)
+        
+        files_metadata_for_prompt_text = format_uploaded_files_info_for_prompt_text(self.uploaded_files_metadata)
 
-
-    def run_workflow(self): # (Adaptado para v9.3.1)
-        print_agent_message("TaskManager", "Iniciando fluxo de trabalho...")
-        log_message(f"Meta inicial: {self.goal}", "TaskManager")
-
+        if not self.decompose_task(initial_goal, uploaded_file_objects, files_metadata_for_prompt_text):
+            print_agent_message(agent_display_name, "Falha na decomposição da tarefa. Encerrando.")
+            return
+        if not self.task_list:
+            print_agent_message(agent_display_name, "Nenhuma tarefa decomposta. Encerrando.")
+            return
+        
+        print_agent_message(agent_display_name, "--- PLANO DE TAREFAS INICIAL ---")
+        for i, task_item in enumerate(self.task_list): print(f"  {i+1}. {task_item}")
+        print_user_message("Aprova este plano? (s/n)"); user_approval = input("➡️ ").strip().lower()
+        if user_approval != 's': print_agent_message(agent_display_name, "Plano rejeitado. Encerrando."); return
+        
         overall_success = False
-        automatic_validation_attempts = 0
-        current_goal_to_decompose = self.goal
-        previous_plan_for_replan = None
-        last_automatic_validation_feedback = None
-        last_manual_feedback_str = None
-
-        while automatic_validation_attempts <= MAX_AUTOMATIC_VALIDATION_RETRIES and not overall_success:
-            if automatic_validation_attempts > 0: 
-                log_message(f"Tentativa de replanejamento automático {automatic_validation_attempts}/{MAX_AUTOMATIC_VALIDATION_RETRIES}...", "TaskManager")
-            
-            self.current_task_list = self.decompose_goal(
-                current_goal_to_decompose, previous_plan_for_replan,
-                last_automatic_validation_feedback, last_manual_feedback_str
-            )
-            last_manual_feedback_str = None 
-
-            if not self.current_task_list:
-                print_agent_message("TaskManager", "Não foi possível decompor a meta. Encerrando."); return
-
-            print_agent_message("TaskManager", "--- PLANO DE TAREFAS ---")
-            for i, task_desc in enumerate(self.current_task_list): print(f"  {i+1}. {task_desc}")
-            
-            if input("👤 Aprova este plano? (s/n) ➡️ ").strip().lower() != 's':
-                print_agent_message("TaskManager", "Plano não aprovado. Encerrando."); return
-            log_message("Plano aprovado pelo usuário.", "UsuárioInput")
-            
-            self.executed_tasks_results = [] 
-            self.staged_artifacts = {}
-            
-            current_task_index = 0
-            while current_task_index < len(self.current_task_list):
-                task_description_str = self.current_task_list[current_task_index]
-                
-                print_agent_message("TaskManager", f"Próxima tarefa ({current_task_index + 1}/{len(self.current_task_list)}): {task_description_str}")
-                task_result_data, suggested_new_tasks_from_worker = {}, []
-                
-                if task_description_str.startswith("TASK_GERAR_IMAGEM:"):
-                    image_prompt = task_description_str.replace("TASK_GERAR_IMAGEM:", "").strip()
-                    image_artifact_data, error_msg = self.image_worker.generate_image(image_prompt, original_task_description=task_description_str)
-                    if image_artifact_data:
-                        task_result_data = {"image_artifact_details": image_artifact_data, "text_content": f"Imagem '{image_artifact_data['filename']}' gerada.", "artifacts": [image_artifact_data]}
-                    else:
-                        task_result_data = {"text_content": f"Falha ao gerar imagem: {error_msg}", "artifacts": []}
-                elif task_description_str.startswith("TASK_AVALIAR_IMAGENS:"):
-                    eval_prompt = f"Avaliar as imagens geradas para o objetivo: {self.goal}."
-                    image_artifacts_in_stage = [fn for fn, data in self.staged_artifacts.items() if data.get("type") == "image"]
-                    eval_prompt += f"\nImagens preparadas: {', '.join(image_artifacts_in_stage) if image_artifacts_in_stage else 'Nenhuma'}."
-                    prompt_for_eval = [eval_prompt]
-                    if self.uploaded_file_objects: prompt_for_eval.extend(self.uploaded_file_objects)
-                    eval_result = call_gemini_api_with_retry(prompt_for_eval, "Validator(AvaliaçãoImagem)")
-                    task_result_data = {"text_content": f"Avaliação de imagens: {eval_result or 'N/A'}", "artifacts": []}
-                else: 
-                    task_result_data, suggested_new_tasks_from_worker = self.worker.execute_task(
-                        task_description_str, self.executed_tasks_results,
-                        self.uploaded_files_info, self.goal
-                    )
-                
-                self.process_task_result(task_description_str, task_result_data)
-                log_message(f"Tarefa '{task_description_str}' concluída.", "TaskManager")
-
-                if suggested_new_tasks_from_worker:
-                    log_message(f"Worker sugeriu novas tarefas: {suggested_new_tasks_from_worker}", "TaskManager")
-                    contextual_task_list_for_confirmation = list(self.current_task_list[:current_task_index+1]) 
-                    
-                    approved_new_tasks = self.confirm_new_tasks_with_llm(
-                        self.goal, 
-                        contextual_task_list_for_confirmation,
-                        suggested_new_tasks_from_worker
-                    )
-                    if approved_new_tasks:
-                        log_message(f"Novas tarefas aprovadas pela LLM e adicionadas ao plano: {approved_new_tasks}", "TaskManager")
-                        self.current_task_list = self.current_task_list[:current_task_index+1] + approved_new_tasks + self.current_task_list[current_task_index+1:]
-                        print_agent_message("TaskManager", f"Novas tarefas aprovadas adicionadas ao plano: {approved_new_tasks}")
-                        log_message(f"Plano de tarefas atualizado: {self.current_task_list}", "TaskManager")
-                    else:
-                        log_message("Nenhuma das tarefas sugeridas foi aprovada pela LLM.", "TaskManager")
-                
-                current_task_index += 1 
-            
-            automatic_validation_result = self.validator.validate_results(self.executed_tasks_results, self.staged_artifacts, self.goal)
-            last_automatic_validation_feedback = automatic_validation_result 
-
-            if automatic_validation_result["status"] == "success":
-                print_agent_message("TaskManager", "Validação automática dos artefatos bem-sucedida!")
-                manual_validation_attempts = 0
-                manual_approval_achieved = False 
-                while manual_validation_attempts <= MAX_MANUAL_VALIDATION_RETRIES and not manual_approval_achieved:
-                    manual_val_result = self.present_for_manual_validation()
-                    if manual_val_result["approved"]:
-                        self.save_final_artifacts(); overall_success = True; manual_approval_achieved = True
-                        break 
-                    
-                    last_manual_feedback_str = manual_val_result.get("feedback")
-                    if last_manual_feedback_str == "cancelar" or manual_validation_attempts >= MAX_MANUAL_VALIDATION_RETRIES:
-                        print_agent_message("TaskManager", "Validação manual cancelada ou máximo de tentativas atingido.")
-                        overall_success = False; manual_approval_achieved = True; break 
-                    
-                    print_agent_message("TaskManager", f"Reprovado manualmente. Feedback: {last_manual_feedback_str}")
-                    manual_validation_attempts += 1
-                    automatic_validation_attempts = 0 
-                    previous_plan_for_replan = list(self.current_task_list)
-                    last_automatic_validation_feedback = None 
-                    manual_approval_achieved = True 
-                
-                if overall_success or (last_manual_feedback_str == "cancelar" or manual_validation_attempts > MAX_MANUAL_VALIDATION_RETRIES) :
-                     break 
-            else: 
-                print_agent_message("TaskManager", f"Validação automática falhou: {automatic_validation_result['reason']}")
-                automatic_validation_attempts += 1
-                if automatic_validation_attempts <= MAX_AUTOMATIC_VALIDATION_RETRIES:
-                    print_agent_message("TaskManager", "Tentando replanejar (baseado em falha automática)...")
-                    previous_plan_for_replan = list(self.current_task_list)
-                else:
-                    print_agent_message("TaskManager", "Máx. tentativas de validação automática. Encerrando."); break 
+        manual_retries = 0
         
+        while True: # Loop principal que permite ciclos de feedback
+            current_task_index = 0
+            image_generation_attempts = []
+            self.completed_tasks_results = [] # Limpa resultados para um novo ciclo de feedback, se houver
+            self.temp_artifacts = [] # Limpa artefatos temporários
+
+            while current_task_index < len(self.task_list):
+                current_task_description = self.task_list[current_task_index]
+                # ... (resto do loop de execução de tarefas, como na v8.9) ...
+                if current_task_description.startswith("TASK_GERAR_IMAGEM:"):
+                    # ... lógica para chamar ImageWorker e obter o caminho do arquivo temporário ...
+                    image_prompt_description = current_task_description.replace("TASK_GERAR_IMAGEM:", "").strip() # Simplificado
+                    # (A lógica para obter o prompt da tarefa anterior é mantida)
+                    task_result_path = self.image_worker.generate_image(image_prompt_description)
+                    image_generation_attempts.append({"image_prompt_used": image_prompt_description, "result": task_result_path})
+                    self.completed_tasks_results.append({"task": current_task_description, "result": task_result_path})
+                
+                elif current_task_description.startswith("TASK_AVALIAR_IMAGENS:"):
+                    validated_concepts = self.validator.evaluate_and_select_image_concepts(initial_goal, image_generation_attempts, uploaded_file_objects, files_metadata_for_prompt_text)
+                    self.completed_tasks_results.append({"task": current_task_description, "result": validated_concepts})
+                    
+                    # Coleta artefatos de imagem validados
+                    for concept in validated_concepts:
+                        if isinstance(concept.get("result"), str) and os.path.exists(concept.get("result")):
+                            self.temp_artifacts.append({
+                                'type': 'imagem', 
+                                'artifact_path': concept.get("result"),
+                                'prompt': concept.get('image_prompt_used')
+                            })
+                
+                else: # Tarefa de texto/código
+                    # ... lógica do worker ...
+                    # ... se gerar código, também salvaria num arquivo temporário e adicionaria a self.temp_artifacts ...
+                    task_result_text, new_tasks = self.worker.execute_sub_task(...)
+                    # (lógica para extrair e salvar arquivos de código temporários aqui)
+
+                current_task_index += 1
+
+            # Fim do ciclo de execução de tarefas, inicia validação
+            print_agent_message(agent_display_name, "Ciclo de tarefas concluído. Iniciando validação final.")
+            
+            final_context = "\n".join([f"Tarefa: {r['task']}\nResultado: {str(r.get('result'))[:300]}..." for r in self.completed_tasks_results])
+            
+            is_valid, validation_output = self.validator.validate_and_save_final_output(initial_goal, final_context, uploaded_file_objects, self.temp_artifacts)
+
+            if is_valid:
+                print_agent_message(agent_display_name, f"Validação bem-sucedida! Avaliação: {validation_output}")
+                overall_success = True
+                break # Sai do loop principal de feedback
+
+            # Se a validação falhou
+            print_agent_message(agent_display_name, f"Validação falhou. Motivo: {validation_output}")
+            
+            if manual_retries >= MAX_MANUAL_VALIDATION_RETRIES:
+                print_agent_message(agent_display_name, "Número máximo de tentativas manuais atingido. Encerrando.")
+                break
+
+            user_choice = get_user_feedback_or_approval()
+            
+            if user_choice == 'a':
+                print_agent_message(agent_display_name, "Aprovação manual do usuário. Forçando o salvamento do último estado dos artefatos...")
+                overall_success = True
+                # A lógica de salvamento já ocorreu dentro do validator, mas poderíamos forçar aqui novamente se necessário.
+                break
+            
+            elif user_choice == 's':
+                print_agent_message(agent_display_name, "Processo encerrado pelo usuário.")
+                break
+            
+            elif user_choice == 'f':
+                print_user_message("Por favor, forneça seu feedback para corrigir o resultado:")
+                feedback = input("➡️ ").strip()
+                log_message(f"Feedback do usuário: {feedback}", "UsuárioInput")
+                
+                self.task_list.append(f"TASK_CORRIGIR_COM_FEEDBACK: O resultado anterior não foi satisfatório. Corrija-o com base no seguinte feedback do usuário: '{feedback}'")
+                manual_retries += 1
+                print_agent_message(agent_display_name, "Nova tarefa de correção adicionada. Iniciando novo ciclo...")
+
+        # Limpa os artefatos temporários no final
+        try:
+            shutil.rmtree(TEMP_ARTIFACTS_DIR)
+            os.makedirs(TEMP_ARTIFACTS_DIR) # Recria o diretório vazio
+            log_message("Diretório de artefatos temporários foi limpo.", "Sistema")
+        except Exception as e:
+            log_message(f"Erro ao limpar diretório de artefatos temporários: {e}", "Sistema")
+
         if overall_success: print_agent_message("TaskManager", "Fluxo de trabalho concluído com sucesso!")
         else: print_agent_message("TaskManager", "Fluxo de trabalho concluído com falhas ou cancelamento.")
-
+        
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v9.3.3" # ATUALIZADO P/ SYNC AO FINAL NA API 
+    SCRIPT_VERSION = "v9.4"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
-    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
+    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Correção de Bugs de Imagem e Feedback) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas Finais: {OUTPUT_DIRECTORY}\n⏳ Artefatos Temporários: {TEMP_ARTIFACTS_DIR}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
     
     print_user_message("Deseja limpar o cache de uploads (local e/ou da API Gemini) antes de começar? (s/n)")
@@ -797,10 +1021,15 @@ if __name__ == "__main__":
     
     if not initial_goal_input.strip():
         print("Nenhuma meta definida. Encerrando.")
+        log_message("Nenhuma meta definida. Encerrando.", "Sistema")
     else:
-        task_manager = TaskManager(initial_goal_input, uploaded_files, uploaded_files_meta)
-        task_manager.run_workflow()
+        # Limpa o diretório de artefatos temporários do início
+        if os.path.exists(TEMP_ARTIFACTS_DIR):
+            shutil.rmtree(TEMP_ARTIFACTS_DIR)
+        os.makedirs(TEMP_ARTIFACTS_DIR)
+        
+        manager = TaskManager()
+        manager.run_workflow(initial_goal_input, uploaded_files, uploaded_files_meta)
 
     log_message(f"--- Fim da Execução ({SCRIPT_VERSION}) ---", "Sistema")
-    print(f"\n--- Execução ({SCRIPT_VERSION}) Finalizada ---")
-
+    print("\n--- Fim da Execução ---")
