@@ -109,7 +109,7 @@ def call_gemini_api_with_retry(prompt_parts, agent_name, model_name, gen_config=
             if hasattr(response, 'text') and response.text is not None:
                  return response.text.strip()
 
-            if response.candidates and response.candidates[0].content.parts:
+            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
                 return response.candidates[0].content.parts[0].text.strip()
 
             return None
@@ -462,19 +462,21 @@ class TaskManager:
 
     def run_workflow(self, initial_goal, uploaded_file_objects, uploaded_files_metadata):
         self.uploaded_files_metadata = uploaded_files_metadata
-        print_agent_message("TaskManager", "Iniciando fluxo de trabalho...")
+        agent_display_name = "TaskManager"
+        print_agent_message(agent_display_name, "Iniciando fluxo de trabalho...")
         
         files_metadata_for_prompt_text = format_uploaded_files_info_for_prompt_text(self.uploaded_files_metadata)
 
         if not self.decompose_task(initial_goal, uploaded_file_objects, files_metadata_for_prompt_text):
-            print_agent_message("TaskManager", "Falha na decomposição da tarefa. Encerrando."); return
+            print_agent_message(agent_display_name, "Falha na decomposição da tarefa. Encerrando."); return
         
-        print_agent_message("TaskManager", "--- PLANO DE TAREFAS INICIAL ---")
+        print_agent_message(agent_display_name, "--- PLANO DE TAREFAS INICIAL ---")
         for i, task in enumerate(self.task_list): print(f"  {i+1}. {task}")
         print_user_message("Aprova este plano? (s/n)")
         if input("➡️ ").strip().lower() != 's':
-            print_agent_message("TaskManager", "Plano rejeitado. Encerrando."); return
+            print_agent_message(agent_display_name, "Plano rejeitado. Encerrando."); return
         
+        # CORREÇÃO: Lógica do loop restaurada
         overall_success = False
         manual_retries = 0
         
@@ -554,9 +556,9 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v9.4.6"
+    SCRIPT_VERSION = "v9.4.7"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
-    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Aprovação por Timeout) ---")
+    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Correção de Validação & Loop) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas Finais: {OUTPUT_DIRECTORY}\n⏳ Artefatos Temporários: {TEMP_ARTIFACTS_DIR}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
     
     print_user_message("Deseja limpar o cache de uploads (local e/ou da API Gemini) antes de começar? (s/n)")
@@ -579,3 +581,4 @@ if __name__ == "__main__":
 
     log_message(f"--- Fim da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print("\n--- Fim da Execução ---")
+
