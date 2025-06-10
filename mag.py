@@ -8,6 +8,8 @@ import traceback
 import base64
 import glob
 import shutil
+import sys
+import select
 
 # --- Configuração dos Diretórios e Arquivos ---
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -28,6 +30,7 @@ MAX_API_RETRIES = 3
 INITIAL_RETRY_DELAY_SECONDS = 5
 RETRY_BACKOFF_FACTOR = 2
 MAX_MANUAL_VALIDATION_RETRIES = 2
+USER_APPROVAL_TIMEOUT_SECONDS = 60 
 
 # --- Funções de Utilidade ---
 def sanitize_filename(name, allow_extension=True):
@@ -250,13 +253,37 @@ def format_uploaded_files_info_for_prompt_text(files_metadata_list):
     if not files_metadata_list: return "Nenhum arquivo complementar fornecido."
     return "Arquivos complementares:\n" + "\n".join([f"- {m['display_name']} (ID: {m.get('file_id') or m.get('name')})" for m in files_metadata_list])
 
+def get_user_input_with_timeout(prompt_str, timeout):
+    print(prompt_str, end='', flush=True)
+    rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+    if rlist:
+        return sys.stdin.readline().strip().lower()
+    else:
+        return "timeout"
+
 def get_user_feedback_or_approval():
-    while True:
-        prompt = "\nO que fazer?\n  [A]provar, [F]eedback, [S]air\nEscolha: "
-        print_user_message(prompt)
-        choice = input("➡️ ").strip().lower()
-        if choice in ['a', 'f', 's']: return choice
-        print_agent_message("Sistema", "❌ Opção inválida.")
+    prompt = (
+        f"\nO que fazer? (Aprovação automática em {USER_APPROVAL_TIMEOUT_SECONDS} segundos)\n"
+        "  [A]provar - Salvar os artefatos como estão.\n"
+        "  [F]eedback - Fornecer feedback para o sistema tentar novamente.\n"
+        "  [S]air - Encerrar o processo.\n"
+        "Escolha: "
+    )
+    print_user_message(prompt)
+    
+    choice = get_user_input_with_timeout("➡️ ", USER_APPROVAL_TIMEOUT_SECONDS)
+
+    if choice == "timeout":
+        print_agent_message("Sistema", "Tempo esgotado. Aprovando automaticamente os artefatos.")
+        log_message("Aprovação automática por timeout.", "Sistema")
+        return 'a'
+
+    if choice in ['a', 'f', 's']:
+        log_message(f"Usuário escolheu a opção: {choice.upper()}", "UsuárioInput")
+        return choice
+    else:
+        print_agent_message("Sistema", f"❌ Opção inválida ('{choice}'). Encerrando para evitar loop.")
+        return 's'
 
 # --- Classes de Agentes ---
 
@@ -407,7 +434,6 @@ class TaskManager:
             log_message(f"Erro na decomposição da tarefa: {e}", agent_display_name)
             return False
 
-    # CORREÇÃO: Restaurando a função para validar novas tarefas
     def confirm_new_tasks_with_llm(self, original_goal, current_task_list, suggested_new_tasks, uploaded_file_objects, files_metadata_for_prompt_text):
         agent_name = "TaskManager(Valida Novas Tarefas)"
         if not suggested_new_tasks: return []
@@ -452,7 +478,7 @@ class TaskManager:
         overall_success = False
         manual_retries = 0
         
-        while True: # Loop principal de feedback/correção
+        while True:
             current_task_index = 0
             image_generation_attempts = []
             self.completed_tasks_results = []
@@ -462,7 +488,6 @@ class TaskManager:
             while current_task_index < len(self.task_list):
                 task_desc = self.task_list[current_task_index]
                 
-                # CORREÇÃO: Garantir que task_desc é uma string
                 if isinstance(task_desc, dict):
                     task_desc = task_desc.get("tarefa", str(task_desc))
 
@@ -486,13 +511,12 @@ class TaskManager:
                     result, new_tasks = self.worker.execute_sub_task(task_desc, context, uploaded_file_objects, task_number, total_tasks_in_cycle)
                     self.completed_tasks_results.append({"task": task_desc, "result": result})
                     
-                    # CORREÇÃO: Lógica para novas tarefas restaurada
                     if new_tasks:
                         approved_tasks = self.confirm_new_tasks_with_llm(initial_goal, self.task_list, new_tasks, uploaded_file_objects, files_metadata_for_prompt_text)
                         if approved_tasks:
                             for i, new_task in enumerate(approved_tasks):
                                 self.task_list.insert(current_task_index + 1 + i, new_task)
-                            total_tasks_in_cycle = len(self.task_list) # Atualiza o total
+                            total_tasks_in_cycle = len(self.task_list)
                             print_agent_message("TaskManager", f"Plano atualizado com {len(approved_tasks)} nova(s) tarefa(s).")
                 
                 current_task_index += 1
@@ -530,9 +554,9 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v9.4.5"
+    SCRIPT_VERSION = "v9.4.6"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
-    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Correção de Bugs Críticos) ---")
+    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Aprovação por Timeout) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas Finais: {OUTPUT_DIRECTORY}\n⏳ Artefatos Temporários: {TEMP_ARTIFACTS_DIR}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
     
     print_user_message("Deseja limpar o cache de uploads (local e/ou da API Gemini) antes de começar? (s/n)")
