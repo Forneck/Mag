@@ -332,7 +332,6 @@ class Validator:
         print_agent_message(agent_display_name, "Validando resultado final...")
         summary = "\n".join([f"- {a['type']}: {os.path.basename(a.get('filename') or a.get('artifact_path',''))}" for a in artifacts])
         
-        # CORREÇÃO: Mudar de pedir JSON para pedir marcadores
         prompt_text_part_validation = rf"""
 Você é um Gerente de QA. Analise o contexto e os artefatos gerados para a meta: "{goal}"
 Contexto: {context}
@@ -354,7 +353,6 @@ VALIDATION_PASSED: [escreva true ou false aqui]
             return False, "Falha ao obter avaliação final da API."
         
         try:
-            # CORREÇÃO: Extrair dados usando regex com os marcadores
             pass_match = re.search(r"VALIDATION_PASSED:\s*(true|false)", response, re.IGNORECASE)
             report_match = re.search(r"---MAIN_REPORT_START---([\s\S]*?)---MAIN_REPORT_END---", response, re.DOTALL)
             eval_match = re.search(r"---GENERAL_EVALUATION_START---([\s\S]*?)---GENERAL_EVALUATION_END---", response, re.DOTALL)
@@ -409,17 +407,32 @@ class TaskManager:
             log_message(f"Erro na decomposição da tarefa: {e}", agent_display_name)
             return False
 
+    # CORREÇÃO: Restaurando a função para validar novas tarefas
     def confirm_new_tasks_with_llm(self, original_goal, current_task_list, suggested_new_tasks, uploaded_file_objects, files_metadata_for_prompt_text):
         agent_name = "TaskManager(Valida Novas Tarefas)"
         if not suggested_new_tasks: return []
         print_agent_message(agent_name, f"Avaliando novas tarefas: {suggested_new_tasks}")
         prompt_text = f"""Objetivo: "{original_goal}".\nTarefas atuais: {json.dumps(current_task_list)}.\nNovas sugeridas: {json.dumps(suggested_new_tasks)}.\nAvalie e retorne em JSON APENAS as tarefas aprovadas. Se nenhuma, []."""
         response = call_gemini_api_with_retry([prompt_text] + uploaded_file_objects, agent_name, GEMINI_TEXT_MODEL_NAME, generation_config_text)
-        try:
-            match = re.search(r'\[.*\]', response, re.DOTALL)
-            return json.loads(match.group(0)) if match else []
-        except:
-            return []
+        
+        approved_tasks_final = []
+        if response:
+            try:
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', response, re.DOTALL)
+                parsed_response = []
+                if json_match:
+                    json_str = json_match.group(1) or json_match.group(2)
+                    parsed_response = json.loads(json_str)
+                
+                if isinstance(parsed_response, list):
+                    for item in parsed_response:
+                        if isinstance(item, str) and item.strip():
+                            approved_tasks_final.append(item.strip())
+                        elif isinstance(item, dict) and "tarefa" in item and isinstance(item["tarefa"], str) and item["tarefa"].strip():
+                            approved_tasks_final.append(item["tarefa"].strip())
+            except Exception as ex:
+                log_message(f"Erro ao decodificar/processar aprovação: {ex}. Resp: {response}", agent_name)
+        return approved_tasks_final
 
     def run_workflow(self, initial_goal, uploaded_file_objects, uploaded_files_metadata):
         self.uploaded_files_metadata = uploaded_files_metadata
@@ -439,7 +452,7 @@ class TaskManager:
         overall_success = False
         manual_retries = 0
         
-        while True:
+        while True: # Loop principal de feedback/correção
             current_task_index = 0
             image_generation_attempts = []
             self.completed_tasks_results = []
@@ -448,6 +461,11 @@ class TaskManager:
 
             while current_task_index < len(self.task_list):
                 task_desc = self.task_list[current_task_index]
+                
+                # CORREÇÃO: Garantir que task_desc é uma string
+                if isinstance(task_desc, dict):
+                    task_desc = task_desc.get("tarefa", str(task_desc))
+
                 task_number = current_task_index + 1
                 context = "\n".join([f"Tarefa: {r['task']}\nResultado: {str(r.get('result'))[:200]}" for r in self.completed_tasks_results])
                 
@@ -467,12 +485,14 @@ class TaskManager:
                 else:
                     result, new_tasks = self.worker.execute_sub_task(task_desc, context, uploaded_file_objects, task_number, total_tasks_in_cycle)
                     self.completed_tasks_results.append({"task": task_desc, "result": result})
+                    
+                    # CORREÇÃO: Lógica para novas tarefas restaurada
                     if new_tasks:
                         approved_tasks = self.confirm_new_tasks_with_llm(initial_goal, self.task_list, new_tasks, uploaded_file_objects, files_metadata_for_prompt_text)
                         if approved_tasks:
                             for i, new_task in enumerate(approved_tasks):
                                 self.task_list.insert(current_task_index + 1 + i, new_task)
-                            total_tasks_in_cycle = len(self.task_list)
+                            total_tasks_in_cycle = len(self.task_list) # Atualiza o total
                             print_agent_message("TaskManager", f"Plano atualizado com {len(approved_tasks)} nova(s) tarefa(s).")
                 
                 current_task_index += 1
@@ -510,7 +530,7 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v9.4.4"
+    SCRIPT_VERSION = "v9.4.5"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Correção de Bugs Críticos) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas Finais: {OUTPUT_DIRECTORY}\n⏳ Artefatos Temporários: {TEMP_ARTIFACTS_DIR}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
