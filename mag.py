@@ -106,7 +106,7 @@ def call_gemini_api_with_retry(prompt_parts, agent_name, model_name, gen_config=
             if hasattr(response, 'text') and response.text is not None:
                  return response.text.strip()
 
-            if response.candidates and response.candidates[0].content and response.candidates[0].content.parts:
+            if response.candidates and response.candidates[0].content.parts:
                 return response.candidates[0].content.parts[0].text.strip()
 
             return None
@@ -194,7 +194,7 @@ def get_uploaded_files_info_from_user():
             for idx in indices_to_try:
                 if 0 <= idx < len(offer_for_reuse):
                     chosen_meta = offer_for_reuse[idx]
-                    file_id = chosen_meta["name"] # O ID é o campo 'name'
+                    file_id = chosen_meta["name"]
                     if file_id in reused_file_ids: continue
                     try:
                         file_obj = api_files_dict.get(file_id)
@@ -227,7 +227,7 @@ def get_uploaded_files_info_from_user():
                         uploaded_file_objects.append(uf)
                         uf_meta = uf.to_dict()
                         uf_meta['user_path'] = fp
-                        uf_meta['file_id'] = uf.name # Adiciona 'file_id' para consistência
+                        uf_meta['file_id'] = uf.name
                         uploaded_files_metadata.append(uf_meta)
                         print(f"✅ '{uf.display_name}' (ID: {uf.name}) enviado!")
                     except Exception as e:
@@ -276,10 +276,43 @@ class ImageWorker:
         return "Falha na geração da imagem."
 
 class Worker:
-    def execute_sub_task(self, description, context, files):
-        print_agent_message("Worker", f"Executando: '{description}'")
-        prompt = f"Tarefa: {description}\nContexto: {context}\nExecute a tarefa."
-        return call_gemini_api_with_retry([prompt] + files, "Worker", GEMINI_TEXT_MODEL_NAME, generation_config_text), []
+    def execute_sub_task(self, description, context, files, task_num, total_tasks):
+        print_agent_message("Worker", f"Executando ({task_num}/{total_tasks}): '{description}'")
+        prompt = rf"""
+Você é um Agente Executor. Tarefa atual: "{description}"
+Contexto (resultados anteriores, objetivo original, arquivos):
+{context}
+
+Execute a tarefa.
+- Se for "Criar uma descrição textual detalhada (prompt) para gerar a imagem de [...]", seu resultado DEVE ser APENAS essa descrição textual.
+- Se a tarefa envolver modificar ou criar arquivos de código, forneça o CONTEÚDO COMPLETO do arquivo. Indique o NOME DO ARQUIVO CLARAMENTE antes de cada bloco de código (ex: "Arquivo: nome.ext" ou ```python nome.py ... ```).
+- Se identificar NOVAS sub-tarefas cruciais, liste-as em 'NOVAS_TAREFAS_SUGERIDAS:' como array JSON de strings. Se não, omita.
+"""
+        response_text = call_gemini_api_with_retry([prompt] + files, "Worker", GEMINI_TEXT_MODEL_NAME, generation_config_text)
+        
+        if response_text is None: return None, []
+        
+        task_res, sugg_tasks_strings = response_text, []
+        marker = "NOVAS_TAREFAS_SUGERIDAS:"
+        if marker in response_text:
+            parts = response_text.split(marker, 1)
+            task_res = parts[0].strip()
+            potential_json_or_list = parts[1].strip()
+            try:
+                json_match = re.search(r'```json\s*([\s\S]*?)\s*```|(\[[\s\S]*?\])', potential_json_or_list, re.DOTALL)
+                if json_match:
+                    parsed_suggestions = json.loads(json_match.group(1) or json_match.group(2))
+                    if isinstance(parsed_suggestions, list):
+                        sugg_tasks_strings = [str(item) for item in parsed_suggestions]
+            except Exception as e:
+                log_message(f"Erro ao processar novas tarefas: {e}", "Worker")
+        else:
+            task_res = response_text.strip()
+        
+        if task_res.lower().startswith("resultado da tarefa:"):
+            task_res = task_res[len("resultado da tarefa:"):].strip()
+        
+        return task_res, sugg_tasks_strings
 
 class Validator:
     def __init__(self, tm_ref): self.tm = tm_ref
@@ -295,24 +328,61 @@ class Validator:
         except: return []
         
     def validate_and_save_final_output(self, goal, context, files, artifacts):
-        print_agent_message("Validator", "Validando resultado final...")
+        agent_display_name = "Validator(Final)"
+        print_agent_message(agent_display_name, "Validando resultado final...")
         summary = "\n".join([f"- {a['type']}: {os.path.basename(a.get('filename') or a.get('artifact_path',''))}" for a in artifacts])
-        prompt = f'Meta: "{goal}"\nContexto: {context}\nArtefatos: {summary}\nRetorne JSON com "validation_passed" (bool), "main_report" (markdown), "general_evaluation" (texto).'
-        response = call_gemini_api_with_retry([prompt] + files, "Validator", GEMINI_TEXT_MODEL_NAME, generation_config_text)
+        
+        # CORREÇÃO: Mudar de pedir JSON para pedir marcadores
+        prompt_text_part_validation = rf"""
+Você é um Gerente de QA. Analise o contexto e os artefatos gerados para a meta: "{goal}"
+Contexto: {context}
+Artefatos para Salvar: {summary}
+
+Sua resposta DEVE seguir ESTRITAMENTE o seguinte formato com marcadores:
+
+VALIDATION_PASSED: [escreva true ou false aqui]
+---MAIN_REPORT_START---
+[Escreva o relatório detalhado em Markdown aqui. Pode ter múltiplas linhas e conter aspas.]
+---MAIN_REPORT_END---
+---GENERAL_EVALUATION_START---
+[Escreva a avaliação geral e concisa aqui.]
+---GENERAL_EVALUATION_END---
+"""
+        response = call_gemini_api_with_retry([prompt_text_part_validation] + files, agent_display_name, GEMINI_TEXT_MODEL_NAME, generation_config_text)
+
+        if not response:
+            return False, "Falha ao obter avaliação final da API."
+        
         try:
-            match = re.search(r'```json\s*([\s\S]*?)\s*```', response, re.DOTALL)
-            data = json.loads(match.group(1)) if match else {}
-            if data.get("validation_passed"):
-                final_dir = os.path.join(OUTPUT_DIRECTORY, f"artefatos_finais_{sanitize_filename(goal, False)}_{CURRENT_TIMESTAMP_STR}")
+            # CORREÇÃO: Extrair dados usando regex com os marcadores
+            pass_match = re.search(r"VALIDATION_PASSED:\s*(true|false)", response, re.IGNORECASE)
+            report_match = re.search(r"---MAIN_REPORT_START---([\s\S]*?)---MAIN_REPORT_END---", response, re.DOTALL)
+            eval_match = re.search(r"---GENERAL_EVALUATION_START---([\s\S]*?)---GENERAL_EVALUATION_END---", response, re.DOTALL)
+
+            validation_passed = (pass_match.group(1).lower() == 'true') if pass_match else False
+            main_report = report_match.group(1).strip() if report_match else "Relatório não gerado."
+            evaluation_text = eval_match.group(1).strip() if eval_match else "Avaliação não gerada."
+
+            goal_slug = sanitize_filename(goal, allow_extension=False)
+            assessment_file_name = os.path.join(OUTPUT_DIRECTORY, f"avaliacao_completa_{goal_slug}_{CURRENT_TIMESTAMP_STR}.md")
+            with open(assessment_file_name, "w", encoding="utf-8") as f:
+                f.write(f"# Relatório: {goal}\n\n{main_report}\n\n## Avaliação da IA\n{evaluation_text}")
+            print_agent_message(agent_display_name, f"Relatório de avaliação salvo: {assessment_file_name}")
+
+            if validation_passed:
+                final_dir = os.path.join(OUTPUT_DIRECTORY, f"artefatos_finais_{goal_slug}_{CURRENT_TIMESTAMP_STR}")
                 os.makedirs(final_dir, exist_ok=True)
                 for a in artifacts:
                     src = a.get('temp_path') or a.get('artifact_path')
                     if src and os.path.exists(src):
                         dest_name = a.get('filename') or f"imagem_{sanitize_filename(a.get('prompt', '')[:30], False)}.png"
                         shutil.copy(src, os.path.join(final_dir, dest_name))
-                        print_agent_message("Validator", f"✅ Artefato final salvo: {dest_name}")
-            return data.get("validation_passed", False), data.get("general_evaluation", "Avaliação falhou.")
-        except Exception as e: return False, f"Falha ao processar validação: {e}"
+                        print_agent_message(agent_display_name, f"✅ Artefato final salvo: {dest_name}")
+            
+            return validation_passed, evaluation_text
+        except Exception as e: 
+            log_message(f"Erro ao processar validação com marcadores: {e}\nResposta Bruta:\n{response}", agent_display_name)
+            return False, f"Falha ao processar resposta de validação: {e}"
 
 class TaskManager:
     def __init__(self):
@@ -339,11 +409,25 @@ class TaskManager:
             log_message(f"Erro na decomposição da tarefa: {e}", agent_display_name)
             return False
 
+    def confirm_new_tasks_with_llm(self, original_goal, current_task_list, suggested_new_tasks, uploaded_file_objects, files_metadata_for_prompt_text):
+        agent_name = "TaskManager(Valida Novas Tarefas)"
+        if not suggested_new_tasks: return []
+        print_agent_message(agent_name, f"Avaliando novas tarefas: {suggested_new_tasks}")
+        prompt_text = f"""Objetivo: "{original_goal}".\nTarefas atuais: {json.dumps(current_task_list)}.\nNovas sugeridas: {json.dumps(suggested_new_tasks)}.\nAvalie e retorne em JSON APENAS as tarefas aprovadas. Se nenhuma, []."""
+        response = call_gemini_api_with_retry([prompt_text] + uploaded_file_objects, agent_name, GEMINI_TEXT_MODEL_NAME, generation_config_text)
+        try:
+            match = re.search(r'\[.*\]', response, re.DOTALL)
+            return json.loads(match.group(0)) if match else []
+        except:
+            return []
+
     def run_workflow(self, initial_goal, uploaded_file_objects, uploaded_files_metadata):
         self.uploaded_files_metadata = uploaded_files_metadata
         print_agent_message("TaskManager", "Iniciando fluxo de trabalho...")
         
-        if not self.decompose_task(initial_goal, uploaded_file_objects, format_uploaded_files_info_for_prompt_text(self.uploaded_files_metadata)):
+        files_metadata_for_prompt_text = format_uploaded_files_info_for_prompt_text(self.uploaded_files_metadata)
+
+        if not self.decompose_task(initial_goal, uploaded_file_objects, files_metadata_for_prompt_text):
             print_agent_message("TaskManager", "Falha na decomposição da tarefa. Encerrando."); return
         
         print_agent_message("TaskManager", "--- PLANO DE TAREFAS INICIAL ---")
@@ -360,12 +444,15 @@ class TaskManager:
             image_generation_attempts = []
             self.completed_tasks_results = []
             self.temp_artifacts = []
+            total_tasks_in_cycle = len(self.task_list)
 
             while current_task_index < len(self.task_list):
                 task_desc = self.task_list[current_task_index]
+                task_number = current_task_index + 1
                 context = "\n".join([f"Tarefa: {r['task']}\nResultado: {str(r.get('result'))[:200]}" for r in self.completed_tasks_results])
                 
                 if task_desc.startswith("TASK_GERAR_IMAGEM:"):
+                    print_agent_message("TaskManager", f"Delegando tarefa de imagem ({task_number}/{total_tasks_in_cycle})")
                     prompt = task_desc.replace("TASK_GERAR_IMAGEM:", "").strip()
                     if not prompt and self.completed_tasks_results and "descrição" in self.completed_tasks_results[-1]['task'].lower():
                         prompt = self.completed_tasks_results[-1]['result']
@@ -373,15 +460,20 @@ class TaskManager:
                     image_generation_attempts.append({"image_prompt_used": prompt, "result": result})
                     self.completed_tasks_results.append({"task": task_desc, "result": result})
                 elif task_desc.startswith("TASK_AVALIAR_IMAGENS:"):
-                    validated = self.validator.evaluate_and_select_image_concepts(initial_goal, image_generation_attempts, uploaded_file_objects, format_uploaded_files_info_for_prompt_text(self.uploaded_files_metadata))
+                    print_agent_message("TaskManager", f"Delegando tarefa de avaliação ({task_number}/{total_tasks_in_cycle})")
+                    validated = self.validator.evaluate_and_select_image_concepts(initial_goal, image_generation_attempts, uploaded_file_objects, files_metadata_for_prompt_text)
                     self.completed_tasks_results.append({"task": task_desc, "result": [v['image_prompt_used'] for v in validated]})
                     for v in validated: self.temp_artifacts.append({'type': 'imagem', 'artifact_path': v['result'], 'prompt': v['image_prompt_used']})
                 else:
-                    result, new_tasks = self.worker.execute_sub_task(task_desc, context, uploaded_file_objects)
+                    result, new_tasks = self.worker.execute_sub_task(task_desc, context, uploaded_file_objects, task_number, total_tasks_in_cycle)
                     self.completed_tasks_results.append({"task": task_desc, "result": result})
                     if new_tasks:
-                        # (Lógica para confirmar e adicionar novas tarefas aqui)
-                        pass
+                        approved_tasks = self.confirm_new_tasks_with_llm(initial_goal, self.task_list, new_tasks, uploaded_file_objects, files_metadata_for_prompt_text)
+                        if approved_tasks:
+                            for i, new_task in enumerate(approved_tasks):
+                                self.task_list.insert(current_task_index + 1 + i, new_task)
+                            total_tasks_in_cycle = len(self.task_list)
+                            print_agent_message("TaskManager", f"Plano atualizado com {len(approved_tasks)} nova(s) tarefa(s).")
                 
                 current_task_index += 1
 
@@ -401,7 +493,6 @@ class TaskManager:
             user_choice = get_user_feedback_or_approval()
             if user_choice == 'a':
                 print_agent_message("TaskManager", "Aprovação manual. Salvando último estado..."); 
-                # Re-executa o salvamento mesmo que a validação automática tenha falhado
                 self.validator.validate_and_save_final_output(initial_goal, final_context, uploaded_file_objects, self.temp_artifacts)
                 overall_success = True; break
             elif user_choice == 's':
@@ -419,7 +510,7 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v9.4.2c"
+    SCRIPT_VERSION = "v9.4.4"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION} - Correção de Bugs Críticos) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas Finais: {OUTPUT_DIRECTORY}\n⏳ Artefatos Temporários: {TEMP_ARTIFACTS_DIR}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
