@@ -140,7 +140,7 @@ def clear_upload_cache():
         api_files = list(genai.list_files())
         if not api_files: print_agent_message("Sistema", "Nenhum arquivo na API Gemini."); return
         print_agent_message("Sistema", f"Encontrados {len(api_files)} arquivo(s) na API Gemini Files.")
-        if input(f"👤 ‼️ ATENÇÃO ‼️ Deletar {len(api_files)} arquivo(s) da API Gemini? (s/n) ➡️ ").lower() == 's':
+        if input(f"👤 ‼️ ATENÇÃO ‼️ Deletar {len(api_files)} arquivo(s) da API Gemini? (s/n)  ➡️ ").lower() == 's':
             for f_api in api_files: 
                 try: genai.delete_file(name=f_api.name); log_message(f"Arquivo API '{f_api.display_name}' deletado.", "Sistema"); print_agent_message("Sistema", f"  🗑️ Deletado da API: {f_api.display_name}"); time.sleep(0.2)
                 except Exception as e: log_message(f"Erro ao deletar '{f_api.display_name}' da API: {e}", "Sistema")
@@ -205,7 +205,7 @@ def get_uploaded_files_info_from_user():
                 dn = os.path.basename(fp)
                 try:
                     print_agent_message("Sistema", f"Fazendo upload de '{dn}'...")
-                    ext_map = { ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src", ".h": "text/x-chdr", ".hpp": "text/x-c++hdr", ".txt": "text/plain", ".json": "text/plain", ".gradle": "text/plain",
+                    ext_map = { ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src", ".h": "text/x-chdr", ".hpp": "text/x-c++hdr", ".txt": "text/plain", ".json": "text/plain", ".gradle": "text/plain", ".lua": "text/plain", ".xml": "text/plain",
                                 ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif" } # Adicionado tipos de imagem
                     mime = ext_map.get(os.path.splitext(dn)[1].lower())
                     file_obj = genai.upload_file(path=fp, display_name=dn, mime_type=mime)
@@ -426,7 +426,7 @@ class TaskManager:
         self.image_worker = ImageWorker(self) 
         self.validator = Validator(self)
         self.gemini_text_model_name = GEMINI_TEXT_MODEL_NAME
-        log_message("Instância do TaskManager (v9.3.2) criada.", "TaskManager")
+        log_message("Instância do TaskManager (v9.3.3) criada.", "TaskManager")
 
     def confirm_new_tasks_with_llm(self, original_goal, current_task_list_for_prompt, suggested_new_tasks):
         agent_name = "Task Manager (Confirm New Tasks)"
@@ -498,7 +498,7 @@ class TaskManager:
             "1.  \"Criar uma descrição textual detalhada (prompt) para gerar a imagem de [assunto].\"",
             "2.  \"TASK_GERAR_IMAGEM: [assunto da imagem]\"",
             "3.  \"TASK_AVALIAR_IMAGENS: Avaliar a imagem gerada para [objetivo original].\"",
-            "Se precisar usar imagem fornecida MAS SEM ENVOLVER CRIAÇÃO DE IMAGENS, use \"TASK_AVALIAR_IMAGENS: Avaliar a imagem fornecida para [objetivo original].\"",
+            "Se precisar ANALISAR imagem fornecida MAS SEM ENVOLVER CRIAÇÃO DE IMAGENS, use \"TASK_ANALISAR: Analise a imagem fornecida para [objetivo original].\"",
             "Para outras metas, decomponha normalmente. Retorne em JSON array de strings."
         ]
         if previous_plan: 
