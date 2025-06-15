@@ -61,7 +61,7 @@ log_message(f"Modelo Gemini (geração de imagem via SDK): {GEMINI_IMAGE_GENERAT
 
 generation_config_text = {"temperature":0.7,"top_p":0.95,"top_k":64,"max_output_tokens":8192,"response_mime_type":"text/plain"}
 generation_config_image_sdk = {"temperature":1.0,"top_p":0.95,"top_k":64,"response_modalities":['TEXT','IMAGE'],"max_output_tokens":8192}
-safety_settings_gemini=[{"category":"HARM_CATEGORY_HARASSMENT","threshold":"BLOCK_MEDIUM_AND_ABOVE"},{"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"BLOCK_MEDIUM_AND_ABOVE"},{"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"BLOCK_MEDIUM_AND_ABOVE"},{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"BLOCK_MEDIUM_AND_ABOVE"}]
+safety_settings_gemini=[{"category":"HARM_CATEGORY_HARASSMENT","threshold":"BLOCK_MEDIUM_AND_ABOVE"},{"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"BLOCK_MEDIUM_AND_ABOVE"},{"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"BLOCK_NONE"},{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"BLOCK_NONE"}]
 
 # --- Funções Auxiliares de Comunicação ---
 def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
@@ -206,7 +206,7 @@ def get_uploaded_files_info_from_user():
                 try:
                     print_agent_message("Sistema", f"Fazendo upload de '{dn}'...")
                     ext_map = { ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src", ".h": "text/x-chdr", ".hpp": "text/x-c++hdr", ".txt": "text/plain", ".json": "text/plain", ".gradle": "text/plain", ".lua": "text/plain", ".xml": "text/plain",
-                                ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif" } # Adicionado tipos de imagem
+                               ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".glsl": "text/plain", ".glslp": "text/plain" } # Adicionado tipos de imagem
                     mime = ext_map.get(os.path.splitext(dn)[1].lower())
                     file_obj = genai.upload_file(path=fp, display_name=dn, mime_type=mime)
                     uploaded_file_objects.append(file_obj)
@@ -396,7 +396,7 @@ class Validator:
         log_message(f"Iniciando validação automática. Artefatos no stage: {list(staged_artifacts.keys())}", "Validator")
         issues = []
         if not staged_artifacts:
-            expects_files = any(kw in original_goal.lower() for kw in ["criar", "modificar", "salvar", "gerar arquivo"]) or \
+            expects_files = any(kw in original_goal.lower() for kw in ["criar", "modificar", "salvar", "implementar", "gerar arquivo"]) or \
                             (hasattr(self.task_manager, 'current_task_list') and \
                              any(any(kw_task in (list(task.keys())[0] if isinstance(task,dict) else str(task)).lower() for kw_task in ["salvar", "criar arquivo", "gerar o arquivo", "modificar arquivo"]) for task in self.task_manager.current_task_list))
             if expects_files: issues.append("Nenhum artefato preparado, mas era esperado.")
@@ -488,16 +488,18 @@ class TaskManager:
         print_agent_message(agent_display_name, f"Decompondo meta: '{goal_to_decompose}'")
         files_prompt_part = "Arquivos Complementares:\n" + ('\n'.join([f"- {f['display_name']} (ID: {f['file_id']})" for f in self.uploaded_files_info]) if self.uploaded_files_info else "Nenhum.\n")
         prompt_parts = [
-            "Você é um Gerenciador de Tarefas especialista. Decomponha a meta principal em sub-tarefas sequenciais.",
+            "Você é um Gerenciador de Tarefas especialista. Pene bem ao analisar a meta principal, para encontrar todas as sub-taregas necessárias evitando que elas sejam sugeridas futuramente. Decomponha a meta principal em sub-tarefas sequenciais.",
             f"Meta Principal: \"{goal_to_decompose}\"", files_prompt_part,
             "Se a meta envolver CRIAÇÃO DE MÚLTIPLAS IMAGENS (ex: \"crie 3 logos\"), você DEVE:",
             "1.  Criar uma tarefa para gerar a descrição de CADA imagem individualmente. Ex: \"Criar descrição para imagem 1 de [assunto]\".",
             "2.  Seguir CADA tarefa de descrição com uma tarefa \"TASK_GERAR_IMAGEM: [assunto da imagem correspondente]\".",
             "3.  Após TODAS as tarefas de geração de imagem, adicionar UMA tarefa: \"TASK_AVALIAR_IMAGENS: Avaliar as imagens/descrições geradas para [objetivo original] e selecionar as melhores que atendem aos critérios.\"",
+            "4. Caso a imagem seja aprovada na avaliação, use a tarefa \"TASK_SALVAR_IMAGEM: Salvar as imagens aprovadas como [nome_relevante_1.png, nome_relevante_2.png, etc].\"",
             "Se for a CRIAÇÃO DE UMA ÚNICA IMAGEM, use o formato:",
             "1.  \"Criar uma descrição textual detalhada (prompt) para gerar a imagem de [assunto].\"",
             "2.  \"TASK_GERAR_IMAGEM: [assunto da imagem]\"",
-            "3.  \"TASK_AVALIAR_IMAGENS: Avaliar a imagem gerada para [objetivo original].\"",
+            "3.  \"TASK_AVALIAR_IMAGEM: Avaliar a imagem gerada para [objetivo original].\"",
+            "4.  \"TASK_SALVAR_IMAGEM: Salvar a imagem gerada aprovada como [nome_relevante_1…png].\"",
             "Se precisar ANALISAR imagem fornecida MAS SEM ENVOLVER CRIAÇÃO DE IMAGENS, use \"TASK_ANALISAR: Analise a imagem fornecida para [objetivo original].\"",
             "Para outras metas, decomponha normalmente. Retorne em JSON array de strings."
         ]
@@ -586,11 +588,11 @@ class TaskManager:
                     # Prosseguir com o upload mesmo se a deleção falhar (pode ser que o arquivo não exista mais)
 
             # 2. Preparar arquivo temporário para upload
-            ext_map = { ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src", ".h": "text/x-chdr", ".hpp": "text/x-c++hdr", ".txt": "text/plain", ".json": "text/plain",
-                        ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif" }
+            ext_map = { ".md": "text/markdown", ".py": "text/x-python", ".cpp": "text/x-c++src", ".h": "text/x-chdr", ".hpp": "text/x-c++hdr", ".txt": "text/plain", ".json": "text/plain", ".lua": "text/plain", ".xml": "text/plain",
+                       ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".glsl": "text/plain", ".glslp": "text/plain" }
             
             file_ext = os.path.splitext(display_name)[1].lower()
-            mime_type = ext_map.get(file_ext, "application/octet-stream") # Default MIME type
+            mime_type = ext_map.get(file_ext, "text/plain") # Default MIME type
 
             temp_file_path = os.path.join(TEMP_ARTIFACTS_DIR, display_name)
 
@@ -781,7 +783,7 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v9.3.3" # ATUALIZADO P/ SYNC AO FINAL NA API 
+    SCRIPT_VERSION = "v9.3.3b" # ATUALIZADO P/ MULTILINHAS 
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
     print(f"📝 Logs: {LOG_FILE_NAME}\n📄 Saídas Finais: {OUTPUT_DIRECTORY}\n⏳ Artefatos Temporários: {TEMP_ARTIFACTS_DIR}\nℹ️ Cache Uploads: {UPLOADED_FILES_CACHE_DIR}")
@@ -790,7 +792,18 @@ if __name__ == "__main__":
     if input("➡️ ").strip().lower() == 's':
         clear_upload_cache()
     
-    initial_goal_input = input("🎯 Defina a meta principal: ")
+    print_user_message("🎯 Defina a meta principal (digite 'FIM' em uma nova linha para concluir):")
+    lines = []
+    while True:
+        line = input()
+        if line.strip().upper() == 'FIM':
+            break
+        lines.append(line)
+    initial_goal_input = "\n".join(lines)
+    
+    # A linha abaixo é opcional, mas boa para confirmar o que foi lido
+    print_agent_message("TaskManager", "Meta principal recebida e registrada no log.")
+    log_message(f"Meta recebida do usuário:\n---\n{initial_goal_input}\n---", "Usuário")
     print_user_message(initial_goal_input)
     
     uploaded_files, uploaded_files_meta = get_uploaded_files_info_from_user()
