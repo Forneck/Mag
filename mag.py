@@ -6,7 +6,9 @@ import datetime
 import re
 import traceback
 import glob
-from typing import List
+from typing import List, Optional
+from PIL import Image
+from io import BytesIO
 
 # --- Configuração dos Diretórios e Arquivos ---
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -27,8 +29,9 @@ MAX_API_RETRIES = 3
 INITIAL_RETRY_DELAY_SECONDS = 5
 RETRY_BACKOFF_FACTOR = 2
 
+# --- Modelos Gemini ---
 # --- Modelos Gemini (CORRIGIDO) ---
-GEMINI_TEXT_MODEL_NAME = "gemini-2.5-flash-preview-05-20" # Usando o 1.5 Flash que tem bom suporte a 'tool use'
+GEMINI_TEXT_MODEL_NAME = "gemini-2.5-flash-preview-05-20" # Usando o 2.5 Flash 
 GEMINI_IMAGE_MODEL_NAME = "gemini-2.0-flash-preview-image-generation" # Modelo dedicado para imagens conforme a nova documentação
 
 # --- Funções de Utilidade ---
@@ -84,21 +87,51 @@ def save_file(filename: str, content: str) -> str:
         log_message(f"Erro ao salvar arquivo '{filename}' via ferramenta: {e}", "Tool:save_file")
         return f"Erro ao salvar o arquivo '{filename}': {str(e)}"
 
-def generate_image(image_prompt: str) -> str:
-    """Gera uma imagem com base em uma descrição textual detalhada (prompt) e a salva como um arquivo PNG."""
+def translate_to_english(text_to_translate: str) -> str:
+    """Traduz um texto para o inglês usando a API Gemini."""
     try:
-        log_message(f"Iniciando geração de imagem com o prompt: '{image_prompt[:100]}...'", "Tool:generate_image")
+        log_message(f"Traduzindo para inglês: '{text_to_translate[:50]}...'", "Tool:translate")
+        translation_model = genai.GenerativeModel(GEMINI_TEXT_MODEL_NAME)
+        response = translation_model.generate_content(f"Translate the following text to English, output only the translated text and nothing else: '{text_to_translate}'")
+        translated_text = response.text.strip()
+        log_message(f"Tradução concluída: '{translated_text}'", "Tool:translate")
+        return translated_text
+    except Exception as e:
+        log_message(f"Erro na ferramenta de tradução: {e}", "Tool:translate")
+        return f"Erro de tradução: {e}"
+
+def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] = None) -> str:
+    """
+    Gera uma imagem a partir de um prompt em inglês. Pode, opcionalmente, editar uma imagem base.
+
+    Args:
+        image_prompt_in_english (str): A descrição detalhada (em INGLÊS) da imagem a ser gerada ou da edição a ser feita.
+        base_image_path (str, optional): O caminho para a imagem base a ser editada. Se omitido, uma nova imagem será criada.
+
+    Returns:
+        str: Uma mensagem indicando o nome do arquivo salvo ou uma mensagem de erro.
+    """
+    try:
+        log_message(f"Iniciando geração/edição de imagem com o prompt: '{image_prompt_in_english[:100]}...'", "Tool:generate_image")
+        
         image_model = genai.GenerativeModel(GEMINI_IMAGE_MODEL_NAME)
         
-        # O modelo 'imagemaker' espera o prompt diretamente
-        response = image_model.generate_content(image_prompt)
+        contents = [image_prompt_in_english]
+        if base_image_path:
+            log_message(f"Carregando imagem base para edição: {base_image_path}", "Tool:generate_image")
+            if not os.path.exists(base_image_path):
+                return f"Erro: O arquivo da imagem base '{base_image_path}' não foi encontrado."
+            image_part = Image.open(base_image_path)
+            contents.append(image_part)
+
+        response = image_model.generate_content(contents)
         
         image_bytes = response.candidates[0].content.parts[0].blob.data
         if not image_bytes:
              return "Erro: A API não retornou dados de imagem na resposta."
 
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        fn_base = sanitize_filename(f"imagem_{image_prompt[:20]}_{ts}")
+        fn_base = sanitize_filename(f"imagem_{image_prompt_in_english[:20]}_{ts}")
         filename = f"{fn_base}.png"
         full_path = os.path.join(OUTPUT_DIRECTORY, filename)
         
@@ -111,11 +144,12 @@ def generate_image(image_prompt: str) -> str:
         log_message(f"Erro na ferramenta generate_image: {e}\n{traceback.format_exc()}", "Tool:generate_image")
         return f"Erro ao gerar a imagem: {e}"
 
-AGENT_TOOLS = [save_file, generate_image]
+AGENT_TOOLS = [save_file, generate_image, translate_to_english]
 
-# --- Funções de Comunicação e Arquivos (RESTAURADO) ---
+# --- Funções de Comunicação e Arquivos ---
 def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
 def print_user_message(message): print(f"\n👤 [Usuário]: {message}"); log_message(message, "Usuário")
+def print_thought_message(message): print(f"\n🧠 [Pensamento do Agente]:\n{message}"); log_message(f"PENSAMENTO:\n{message}", "Agente")
 
 def get_most_recent_cache_file():
     try:
@@ -131,7 +165,7 @@ def load_cached_files_metadata(cache_file_path):
     except Exception as e: log_message(f"Erro ao carregar cache {cache_file_path}: {e}", "Sistema"); return []
 
 def get_uploaded_files_info_from_user():
-    uploaded_file_objects, uploaded_files_metadata, reused_ids = [], [], set()
+    uploaded_file_objects, uploaded_files_metadata = [], [], set()
     api_files_list = []
     try: api_files_list = list(genai.list_files())
     except Exception as e: log_message(f"Falha API list_files: {e}", "Sistema")
@@ -203,8 +237,12 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GE
     for attempt in range(MAX_API_RETRIES):
         log_message(f"Tentativa {attempt + 1}/{MAX_API_RETRIES} para {agent_name}...", "Sistema")
         try:
-            # CORREÇÃO AQUI: Verificação de tipo mais segura
-            content_parts = [genai.Part.from_text(p) if isinstance(p, str) else p for p in prompt_parts]
+            content_parts = []
+            for p in prompt_parts:
+                if isinstance(p, str):
+                    content_parts.append(genai.types.Part(text=p))
+                else: 
+                    content_parts.append(p)
 
             model_instance = genai.GenerativeModel(
                 model_name,
@@ -213,7 +251,7 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GE
             )
             response = model_instance.generate_content(
                 content_parts,
-                generation_config=active_gen_config 
+                generation_config=genai.types.GenerationConfig(**active_gen_config) 
             )
             return response
         except Exception as e:
@@ -231,11 +269,11 @@ class Worker:
         self.model_name = model_name
         self.system_instruction = (
             "Você é um Agente Executor especialista. Sua responsabilidade é executar tarefas complexas. "
-            "Use as ferramentas `save_file` ou `generate_image` sempre que necessário para cumprir a tarefa. "
-            "Pense passo a passo e use as ferramentas para alcançar o objetivo. "
+            "Pense passo a passo sobre a tarefa. "
+            "Execute o plano usando as ferramentas disponíveis (`save_file`, `generate_image`, `translate_to_english`). "
             "Ao final, forneça um resumo conciso do que foi feito."
         )
-        log_message("Instância do Worker (v10.3) criada.", "Worker")
+        log_message("Instância do Worker (v10.8) criada.", "Worker")
 
     def execute_task(self, sub_task_description, previous_results, uploaded_files_info, original_goal):
         agent_display_name = "Worker"
@@ -253,7 +291,12 @@ class Worker:
         if self.task_manager.uploaded_file_objects:
              prompt_parts.extend(self.task_manager.uploaded_file_objects)
         
-        worker_gen_config = { "thinking_config": {"thinking_budget": -1} } # Orçamento dinâmico
+        worker_gen_config = { 
+            "thinking_config": {
+                "thinking_budget": -1, # Orçamento dinâmico
+                "include_thoughts": False
+            } 
+        } 
 
         response = call_gemini_api_with_retry(
             prompt_parts,
@@ -267,8 +310,17 @@ class Worker:
         if response is None:
             return {"text_content": "Falha: Sem resposta da API."}, []
         
-        final_text_response = response.text if hasattr(response, 'text') and response.text else "Ação concluída através de ferramentas."
-        return {"text_content": final_text_response}, []
+        final_text_response = ""
+        for part in response.candidates[0].content.parts:
+            if hasattr(part, 'thought') and part.thought:
+                print_thought_message(part.text)
+            elif hasattr(part, 'text') and part.text:
+                final_text_response += part.text + "\n"
+        
+        if not final_text_response:
+            final_text_response = "Ação concluída através de ferramentas."
+
+        return {"text_content": final_text_response.strip()}, []
 
 
 class TaskManager:
@@ -281,9 +333,13 @@ class TaskManager:
         self.worker = Worker(self)
         self.system_instruction = (
             "Você é um Gerenciador de Tarefas especialista. Sua função é decompor uma meta principal em um plano de sub-tarefas sequenciais, claras e executáveis. "
-            "Retorne o plano como um array JSON de strings. "
+            "Se a meta envolver a criação ou edição de uma imagem, o plano DEVE incluir as seguintes tarefas em ordem: "
+            "1. Uma tarefa para criar a descrição da imagem (o prompt). "
+            "2. Uma tarefa para chamar a ferramenta 'translate_to_english' para traduzir a descrição. "
+            "3. Uma tarefa para chamar a ferramenta 'generate_image' usando a descrição traduzida. "
+            "Retorne o plano como um array JSON de strings, usando o esquema fornecido."
         )
-        log_message("Instância do TaskManager (v10.3) criada.", "TaskManager")
+        log_message("Instância do TaskManager (v10.8) criada.", "TaskManager")
         
     def decompose_goal(self, goal_to_decompose):
         agent_display_name = "Task Manager (Decomposição)"
@@ -293,7 +349,15 @@ class TaskManager:
         if self.uploaded_file_objects:
              prompt_parts.extend(self.uploaded_file_objects)
         
-        planner_gen_config = { "thinking_config": {"thinking_budget": 1024} }
+        # --- MUDANÇA AQUI: Usando JSON Estruturado ---
+        planner_gen_config = { 
+            "response_mime_type": "application/json",
+            "response_schema": List[str],
+            "thinking_config": {
+                "thinking_budget": 1024,
+                "include_thoughts": True
+            }
+        }
 
         response = call_gemini_api_with_retry(
             prompt_parts, 
@@ -303,21 +367,29 @@ class TaskManager:
             gen_config_dict=planner_gen_config
         )
         
-        if response and hasattr(response, 'text') and response.text:
-            response_text = response.text
+        json_text = ""
+        if response and response.candidates:
+            for part in response.candidates[0].content.parts:
+                 if hasattr(part, 'thought') and part.thought:
+                    print_thought_message(f"(Planejamento) {part.text}")
+                 elif hasattr(part, 'text') and part.text:
+                    json_text += part.text
+        
+        if json_text:
             try:
-                match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text, re.DOTALL)
-                json_str = match.group(1).strip() if match else response_text
-                tasks = json.loads(json_str)
+                # O texto já é um JSON garantido pela API
+                log_message(f"JSON recebido do planejador: {json_text}", "TaskManager")
+                tasks = json.loads(json_text)
                 if isinstance(tasks, list) and all(isinstance(task, str) for task in tasks):
                     return tasks
-            except (json.JSONDecodeError, AttributeError, TypeError) as e:
-                log_message(f"Erro ao processar JSON da decomposição: {e}. Usando fallback.", "TaskManager")
+            except (json.JSONDecodeError, TypeError) as e:
+                log_message(f"Erro ao decodificar JSON (mesmo com schema): {e}. Texto: '{json_text}'. Usando fallback.", "TaskManager")
         
+        # Fallback se algo der muito errado
         return [goal_to_decompose]
     
     def run_workflow(self):
-        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.3)...")
+        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.8)...")
         self.current_task_list = self.decompose_goal(self.goal)
         
         if not self.current_task_list:
@@ -340,11 +412,10 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v10.3 (Correções Finais)"
+    SCRIPT_VERSION = "v10.8 (JSON Estruturado)"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
     
-    # Lógica de upload de arquivos restaurada
     uploaded_files, uploaded_files_meta = get_uploaded_files_info_from_user()
     
     print_user_message("🎯 Defina a meta principal (digite 'FIM' em uma nova linha para concluir):")
