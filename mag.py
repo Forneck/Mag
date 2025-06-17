@@ -28,8 +28,8 @@ INITIAL_RETRY_DELAY_SECONDS = 5
 RETRY_BACKOFF_FACTOR = 2
 
 # --- Modelos Gemini (CORRIGIDO) ---
-GEMINI_TEXT_MODEL_NAME = "gemini-1.5-flash-latest" # Usando o 1.5 Flash que tem bom suporte a 'tool use'
-GEMINI_IMAGE_MODEL_NAME = "imagemaker-1.0-preview" # Modelo dedicado para imagens conforme a nova documentação
+GEMINI_TEXT_MODEL_NAME = "gemini-2.5-flash-preview-05-20" # Usando o 1.5 Flash que tem bom suporte a 'tool use'
+GEMINI_IMAGE_MODEL_NAME = "gemini-2.0-flash-preview-image-generation" # Modelo dedicado para imagens conforme a nova documentação
 
 # --- Funções de Utilidade ---
 def sanitize_filename(name, allow_extension=True):
