@@ -74,7 +74,6 @@ safety_settings_gemini = [
 ]
 
 # --- Ferramentas para o Agente ---
-@genai.tool
 def save_file(filename: str, content: str) -> str:
     """Salva o conteúdo textual fornecido em um arquivo com o nome especificado."""
     try:
@@ -88,7 +87,6 @@ def save_file(filename: str, content: str) -> str:
         log_message(f"Erro ao salvar arquivo '{filename}' via ferramenta: {e}", "Tool:save_file")
         return f"Erro ao salvar o arquivo '{filename}': {str(e)}"
 
-@genai.tool
 def translate_to_english(text_to_translate: str) -> str:
     """Traduz um texto para o inglês usando a API Gemini."""
     try:
@@ -102,7 +100,6 @@ def translate_to_english(text_to_translate: str) -> str:
         log_message(f"Erro na ferramenta de tradução: {e}", "Tool:translate")
         return f"Erro de tradução: {e}"
 
-@genai.tool
 def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] = None) -> str:
     """
     Gera uma imagem a partir de um prompt em inglês. Pode, opcionalmente, editar uma imagem base.
