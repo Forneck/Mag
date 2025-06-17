@@ -29,8 +29,7 @@ MAX_API_RETRIES = 3
 INITIAL_RETRY_DELAY_SECONDS = 5
 RETRY_BACKOFF_FACTOR = 2
 
-# --- Modelos Gemini ---
-# --- Modelos Gemini (CORRIGIDO) ---
+# --- Modelos Gemini (Mantendo a sua configuração) ---
 GEMINI_TEXT_MODEL_NAME = "gemini-2.5-flash-preview-05-20" # Usando o 2.5 Flash 
 GEMINI_IMAGE_MODEL_NAME = "gemini-2.0-flash-preview-image-generation" # Modelo dedicado para imagens conforme a nova documentação
 
@@ -165,7 +164,8 @@ def load_cached_files_metadata(cache_file_path):
     except Exception as e: log_message(f"Erro ao carregar cache {cache_file_path}: {e}", "Sistema"); return []
 
 def get_uploaded_files_info_from_user():
-    uploaded_file_objects, uploaded_files_metadata = [], [], set()
+    # --- CORREÇÃO APLICADA AQUI ---
+    uploaded_file_objects, uploaded_files_metadata, reused_ids = [], [], set()
     api_files_list = []
     try: api_files_list = list(genai.list_files())
     except Exception as e: log_message(f"Falha API list_files: {e}", "Sistema")
@@ -273,7 +273,7 @@ class Worker:
             "Execute o plano usando as ferramentas disponíveis (`save_file`, `generate_image`, `translate_to_english`). "
             "Ao final, forneça um resumo conciso do que foi feito."
         )
-        log_message("Instância do Worker (v10.8) criada.", "Worker")
+        log_message("Instância do Worker (v10.9) criada.", "Worker")
 
     def execute_task(self, sub_task_description, previous_results, uploaded_files_info, original_goal):
         agent_display_name = "Worker"
@@ -339,7 +339,7 @@ class TaskManager:
             "3. Uma tarefa para chamar a ferramenta 'generate_image' usando a descrição traduzida. "
             "Retorne o plano como um array JSON de strings, usando o esquema fornecido."
         )
-        log_message("Instância do TaskManager (v10.8) criada.", "TaskManager")
+        log_message("Instância do TaskManager (v10.9) criada.", "TaskManager")
         
     def decompose_goal(self, goal_to_decompose):
         agent_display_name = "Task Manager (Decomposição)"
@@ -349,7 +349,6 @@ class TaskManager:
         if self.uploaded_file_objects:
              prompt_parts.extend(self.uploaded_file_objects)
         
-        # --- MUDANÇA AQUI: Usando JSON Estruturado ---
         planner_gen_config = { 
             "response_mime_type": "application/json",
             "response_schema": List[str],
@@ -377,7 +376,6 @@ class TaskManager:
         
         if json_text:
             try:
-                # O texto já é um JSON garantido pela API
                 log_message(f"JSON recebido do planejador: {json_text}", "TaskManager")
                 tasks = json.loads(json_text)
                 if isinstance(tasks, list) and all(isinstance(task, str) for task in tasks):
@@ -385,11 +383,10 @@ class TaskManager:
             except (json.JSONDecodeError, TypeError) as e:
                 log_message(f"Erro ao decodificar JSON (mesmo com schema): {e}. Texto: '{json_text}'. Usando fallback.", "TaskManager")
         
-        # Fallback se algo der muito errado
         return [goal_to_decompose]
     
     def run_workflow(self):
-        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.8)...")
+        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.9)...")
         self.current_task_list = self.decompose_goal(self.goal)
         
         if not self.current_task_list:
@@ -403,8 +400,10 @@ class TaskManager:
         
         for task_description in self.current_task_list:
             task_result, _ = self.worker.execute_task(
-                task_description, self.executed_tasks_results, 
-                self.uploaded_files_info, self.goal
+                self.current_task_list, 
+                self.executed_tasks_results, 
+                self.uploaded_files_info, 
+                self.goal
             )
             self.executed_tasks_results.append({task_description: task_result})
 
@@ -412,7 +411,7 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v10.8 (JSON Estruturado)"
+    SCRIPT_VERSION = "v10.9 (Correção de Erro de Desempacotamento)"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
     
