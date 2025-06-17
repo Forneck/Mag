@@ -56,8 +56,8 @@ try:
     if not GEMINI_API_KEY:
         raise ValueError("A variável de ambiente GEMINI_API_KEY não está definida.")
     genai.configure(api_key=GEMINI_API_KEY)
-    CLIENT = genai.Client()
-    log_message("API Gemini configurada e Cliente instanciado.", "Sistema")
+    # CLIENT = genai.Client() # Removido para corrigir AttributeError
+    log_message("API Gemini configurada.", "Sistema")
 except Exception as e:
     print(f"Erro na configuração da API Gemini: {e}")
     log_message(f"Erro na configuração da API Gemini: {e}", "Sistema")
@@ -74,6 +74,7 @@ safety_settings_gemini = [
 ]
 
 # --- Ferramentas para o Agente ---
+@genai.tool
 def save_file(filename: str, content: str) -> str:
     """Salva o conteúdo textual fornecido em um arquivo com o nome especificado."""
     try:
@@ -87,6 +88,7 @@ def save_file(filename: str, content: str) -> str:
         log_message(f"Erro ao salvar arquivo '{filename}': {e}", "Tool:save_file")
         return f"Erro ao salvar o arquivo '{filename}': {str(e)}"
 
+@genai.tool
 def create_cache(file_ids: List[str], system_instruction: Optional[str] = None, ttl_seconds: int = 3600) -> str:
     """
     Cria um cache de conteúdo explícito a partir de arquivos e uma instrução de sistema para reduzir custos em chamadas futuras.
@@ -101,23 +103,21 @@ def create_cache(file_ids: List[str], system_instruction: Optional[str] = None, 
     """
     try:
         log_message(f"Criando cache com arquivos: {file_ids} e TTL: {ttl_seconds}s.", "Tool:create_cache")
-        contents = [CLIENT.files.get(name=fid) for fid in file_ids]
+        # Usa genai.get_file, pois o cliente foi removido
+        contents = [genai.get_file(name=fid) for fid in file_ids]
         
-        cache_config = genai.types.CreateCachedContentConfig(
-            model=GEMINI_TEXT_MODEL_NAME,
-            system_instruction=system_instruction,
-            contents=contents,
-            ttl=datetime.timedelta(seconds=ttl_seconds)
-        )
-        
-        cache = CLIENT.caches.create(config=cache_config)
-        log_message(f"Cache '{cache.name}' criado com sucesso.", "Tool:create_cache")
-        return cache.name
+        # O SDK pode não suportar client.caches.create diretamente.
+        # Esta funcionalidade pode precisar de uma abordagem diferente ou pode estar obsoleta.
+        # Por enquanto, esta ferramenta provavelmente falhará.
+        # Requereria um cliente gRPC para acesso direto.
+        return "Erro: A criação de cache explícito via esta ferramenta não é suportada no momento."
+
     except Exception as e:
         log_message(f"Erro na ferramenta create_cache: {e}\n{traceback.format_exc()}", "Tool:create_cache")
         return f"Erro ao criar o cache: {e}"
 
 
+@genai.tool
 def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] = None) -> str:
     """Gera ou edita uma imagem a partir de um prompt em inglês."""
     try:
@@ -131,7 +131,6 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
             image_part = Image.open(base_image_path)
             contents.append(image_part)
         
-        # --- MUDANÇA AQUI: Usando o mesmo padrão de chamada do resto do agente para consistência ---
         image_model = genai.GenerativeModel(GEMINI_IMAGE_MODEL_NAME)
         response = image_model.generate_content(contents)
         
@@ -157,19 +156,21 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
         return f"Erro ao gerar a imagem: {e}"
 
 AGENT_TOOLS = [save_file, generate_image, create_cache]
+
 # --- Funções de Comunicação e Arquivos ---
 def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
 def print_user_message(message): print(f"\n👤 [Usuário]: {message}"); log_message(message, "Usuário")
 def print_thought_message(message): print(f"\n🧠 [Pensamento do Agente]:\n{message}"); log_message(f"PENSAMENTO:\n{message}", "Agente")
 
 def get_uploaded_files_info_from_user():
-    """Função refatorada para usar a Files API através do cliente instanciado."""
+    """Função refatorada para usar a Files API através do módulo genai."""
     uploaded_file_objects = []
     uploaded_files_metadata = []
     
     api_files_list = []
     try:
-        api_files_list = list(CLIENT.files.list())
+        # Usa genai.list_files()
+        api_files_list = list(genai.list_files())
     except Exception as e:
         log_message(f"Falha ao listar arquivos da API: {e}", "Sistema")
     
@@ -204,7 +205,8 @@ def get_uploaded_files_info_from_user():
                 dn = os.path.basename(fp)
                 try:
                     print_agent_message("Sistema", f"Fazendo upload de '{dn}'...")
-                    file_obj = CLIENT.files.upload(path=fp, display_name=dn)
+                    # Usa genai.upload_file()
+                    file_obj = genai.upload_file(path=fp, display_name=dn)
                     uploaded_file_objects.append(file_obj)
                     uploaded_files_metadata.append({"file_id": file_obj.name, "display_name": dn, "mime_type": file_obj.mime_type, "user_path": fp})
                     print_agent_message("Sistema", f"✅ Novo arquivo '{dn}' (ID: {file_obj.name}) enviado.")
@@ -269,7 +271,7 @@ class Worker:
             "Execute o plano usando as ferramentas disponíveis (`save_file`, `generate_image`, `create_cache`). "
             "Ao final, forneça um resumo conciso do que foi feito."
         )
-        log_message("Instância do Worker (v10.19) criada.", "Worker")
+        log_message("Instância do Worker (v10.20) criada.", "Worker")
 
     def execute_task(self, sub_task_description, previous_results, uploaded_files_info, original_goal):
         agent_display_name = "Worker"
@@ -340,7 +342,7 @@ class TaskManager:
             "Os passos seguintes devem então usar esse cache. "
             "Retorne o plano como um array JSON de strings, usando o esquema fornecido."
         )
-        log_message("Instância do TaskManager (v10.19) criada.", "TaskManager")
+        log_message("Instância do TaskManager (v10.20) criada.", "TaskManager")
         
     def decompose_goal(self, goal_to_decompose):
         agent_display_name = "Task Manager (Decomposição)"
@@ -387,7 +389,7 @@ class TaskManager:
         return [goal_to_decompose]
     
     def run_workflow(self):
-        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.19)...")
+        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.20)...")
         self.current_task_list = self.decompose_goal(self.goal)
         
         if not self.current_task_list:
@@ -412,7 +414,7 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v10.19 (Consistência da API)"
+    SCRIPT_VERSION = "v10.20 (Correção Client)"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
     
