@@ -74,6 +74,7 @@ safety_settings_gemini = [
 ]
 
 # --- Ferramentas para o Agente ---
+@genai.tool
 def save_file(filename: str, content: str) -> str:
     """Salva o conteúdo textual fornecido em um arquivo com o nome especificado."""
     try:
@@ -87,6 +88,7 @@ def save_file(filename: str, content: str) -> str:
         log_message(f"Erro ao salvar arquivo '{filename}' via ferramenta: {e}", "Tool:save_file")
         return f"Erro ao salvar o arquivo '{filename}': {str(e)}"
 
+@genai.tool
 def translate_to_english(text_to_translate: str) -> str:
     """Traduz um texto para o inglês usando a API Gemini."""
     try:
@@ -100,6 +102,7 @@ def translate_to_english(text_to_translate: str) -> str:
         log_message(f"Erro na ferramenta de tradução: {e}", "Tool:translate")
         return f"Erro de tradução: {e}"
 
+@genai.tool
 def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] = None) -> str:
     """
     Gera uma imagem a partir de um prompt em inglês. Pode, opcionalmente, editar uma imagem base.
@@ -307,7 +310,7 @@ class Worker:
         worker_gen_config = { 
             "thinking_config": {
                 "thinking_budget": -1, # Orçamento dinâmico
-                "include_thoughts": False
+                "include_thoughts": True
             } 
         } 
 
@@ -394,4 +397,58 @@ class TaskManager:
                 if isinstance(tasks, list) and all(isinstance(task, str) for task in tasks):
                     return tasks
             except (json.JSONDecodeError, TypeError) as e:
-                log_messag
+                log_message(f"Erro ao decodificar JSON (mesmo com schema): {e}. Texto: '{json_text}'. Usando fallback.", "TaskManager")
+        
+        return [goal_to_decompose]
+    
+    def run_workflow(self):
+        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.11)...")
+        self.current_task_list = self.decompose_goal(self.goal)
+        
+        if not self.current_task_list:
+            print_agent_message("TaskManager", "Não foi possível decompor a meta. Encerrando."); return
+
+        print_agent_message("TaskManager", "--- PLANO DE TAREFAS ---")
+        for i, task_desc in enumerate(self.current_task_list): print(f"  {i+1}. {task_desc}")
+        
+        if input("👤 Aprova este plano? (s/n) ➡️ ").strip().lower() != 's':
+            print_agent_message("TaskManager", "Plano não aprovado. Encerrando."); return
+        
+        for task_description in self.current_task_list:
+            task_result, _ = self.worker.execute_task(
+                task_description, 
+                self.executed_tasks_results, 
+                self.uploaded_files_info, 
+                self.goal
+            )
+            self.executed_tasks_results.append({task_description: task_result})
+
+        print_agent_message("TaskManager", "Fluxo de trabalho concluído! Artefatos salvos em 'gemini_final_outputs'.")
+
+# --- Função Principal ---
+if __name__ == "__main__":
+    SCRIPT_VERSION = "v10.11 (Correção ThinkingConfig)"
+    log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
+    print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
+    
+    uploaded_files, uploaded_files_meta = get_uploaded_files_info_from_user()
+    
+    print_user_message("🎯 Defina a meta principal (digite 'FIM' em uma nova linha para concluir):")
+    lines = []
+    while True:
+        line = input()
+        if line.strip().upper() == 'FIM':
+            break
+        lines.append(line)
+    initial_goal_input = "\n".join(lines)
+
+    log_message(f"Meta recebida do usuário:\n---\n{initial_goal_input}\n---", "Usuário")
+    
+    if not initial_goal_input.strip():
+        print("Nenhuma meta definida. Encerrando.")
+    else:
+        task_manager = TaskManager(initial_goal_input, uploaded_files, uploaded_files_meta)
+        task_manager.run_workflow()
+
+    log_message(f"--- Fim da Execução ({SCRIPT_VERSION}) ---", "Sistema")
+    print(f"\n--- Execução ({SCRIPT_VERSION}) Finalizada ---")
