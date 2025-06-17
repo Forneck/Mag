@@ -33,7 +33,6 @@ RETRY_BACKOFF_FACTOR = 2
 GEMINI_TEXT_MODEL_NAME = "gemini-2.5-flash-preview-05-20" 
 GEMINI_IMAGE_MODEL_NAME = "gemini-2.0-flash-preview-image-generation" 
 
-
 # --- Funções de Utilidade ---
 def sanitize_filename(name, allow_extension=True):
     if not name: return ""
@@ -74,7 +73,6 @@ safety_settings_gemini = [
 ]
 
 # --- Ferramentas para o Agente ---
-@genai.tool
 def save_file(filename: str, content: str) -> dict:
     """Salva o conteúdo textual fornecido em um arquivo com o nome especificado."""
     try:
@@ -88,7 +86,6 @@ def save_file(filename: str, content: str) -> dict:
         log_message(f"Erro ao salvar arquivo '{filename}': {e}", "Tool:save_file")
         return {"status": "error", "message": f"Erro ao salvar o arquivo '{filename}': {str(e)}"}
 
-@genai.tool
 def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] = None) -> dict:
     """Gera ou edita uma imagem a partir de um prompt em inglês."""
     try:
@@ -103,15 +100,30 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
             contents.append(image_part)
         
         image_model = genai.GenerativeModel(GEMINI_IMAGE_MODEL_NAME)
-        response = image_model.generate_content(contents)
         
-        image_part = next((part for part in response.candidates[0].content.parts if hasattr(part, 'blob') and part.blob.data), None)
+        # --- CORREÇÃO APLICADA AQUI: Configuração explícita conforme a documentação ---
+        image_gen_config = genai.types.GenerationConfig(
+            response_modalities=['TEXT', 'IMAGE']
+        )
+        
+        response = image_model.generate_content(
+            contents,
+            generation_config=image_gen_config
+        )
+        
+        # --- CORREÇÃO APLICADA AQUI: Extração correta dos dados da imagem ---
+        image_part = next((part for part in response.candidates[0].content.parts if hasattr(part, 'inline_data') and part.inline_data), None)
 
         if not image_part:
-             return {"status": "error", "message": "A API não retornou dados de imagem (blob) na resposta."}
+             # Tentativa de fallback para o formato 'blob' se 'inline_data' não estiver presente
+             image_part = next((part for part in response.candidates[0].content.parts if hasattr(part, 'blob') and part.blob), None)
+             if not image_part:
+                return {"status": "error", "message": "A API não retornou dados de imagem (inline_data ou blob) na resposta."}
+             image_bytes = image_part.blob.data
+        else:
+            image_bytes = image_part.inline_data.data
 
-        image_bytes = image_part.blob.data
-        
+
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         fn_base = sanitize_filename(f"imagem_{image_prompt_in_english[:20]}_{ts}")
         filename = f"{fn_base}.png"
@@ -190,19 +202,19 @@ def get_uploaded_files_info_from_user():
 def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GEMINI_TEXT_MODEL_NAME, gen_config_dict=None, system_instruction=None, tools=None):
     log_message(f"Iniciando chamada à API Gemini para {agent_name} (Modelo: {model_name})...", "Sistema")
     
-    # --- MUDANÇA AQUI: Construção do GenerationConfig para suportar orquestração de ferramentas ---
     final_config_obj = None
     if gen_config_dict or tools:
         config_copy = (gen_config_dict or {}).copy()
         
         thinking_config_data = config_copy.pop("thinking_config", None)
+        
         thinking_config_obj = None
         if thinking_config_data and isinstance(thinking_config_data, dict):
             thinking_config_obj = genai.types.ThinkingConfig(**thinking_config_data)
             
         final_config_obj = genai.types.GenerationConfig(
             thinking_config=thinking_config_obj,
-            tools=tools, # Passa as ferramentas para a configuração
+            tools=tools,
             **config_copy
         )
     
@@ -219,7 +231,6 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GE
             response = model_instance.generate_content(
                 prompt_parts, 
                 generation_config=final_config_obj,
-                # O parâmetro 'tools' é movido para dentro do GenerationConfig
             )
             return response
         except Exception as e:
@@ -241,7 +252,7 @@ class Worker:
             "Você pode chamar múltiplas ferramentas em sequência. "
             "Ao final de todas as ações, forneça um resumo textual conciso do que foi feito."
         )
-        log_message("Instância do Worker (v10.23) criada.", "Worker")
+        log_message("Instância do Worker (v10.24) criada.", "Worker")
 
     def execute_task(self, sub_task_description, previous_results, uploaded_files_info, original_goal):
         agent_display_name = "Worker"
@@ -259,20 +270,17 @@ class Worker:
         if self.task_manager.uploaded_file_objects:
              prompt_parts.extend(self.task_manager.uploaded_file_objects)
         
-        # --- MUDANÇA AQUI: Orquestração automática habilitada ---
-        # Não há mais loop manual. Apenas uma chamada que deixa o SDK orquestrar.
         response = call_gemini_api_with_retry(
             prompt_parts,
             agent_display_name,
             model_name=self.model_name,
             system_instruction=self.system_instruction,
-            tools=AGENT_TOOLS, # Passa as ferramentas para a chamada
+            tools=AGENT_TOOLS, 
         )
 
         if response is None:
             return {"text_content": "Falha: Sem resposta da API."}, []
         
-        # A resposta final já é o texto após todas as chamadas de ferramenta.
         final_text_response = response.text if hasattr(response, 'text') and response.text else "Ação concluída através de ferramentas."
 
         return {"text_content": final_text_response.strip()}, []
@@ -288,9 +296,10 @@ class TaskManager:
         self.worker = Worker(self)
         self.system_instruction = (
             "Você é um Gerenciador de Tarefas especialista. Sua função é decompor uma meta principal em um plano de sub-tarefas sequenciais e executáveis. "
+            "Se a meta envolver a criação ou edição de uma imagem, o plano DEVE incluir uma tarefa para chamar a ferramenta 'generate_image'. "
             "Retorne o plano como um array JSON de strings, usando o esquema fornecido."
         )
-        log_message("Instância do TaskManager (v10.23) criada.", "TaskManager")
+        log_message("Instância do TaskManager (v10.24) criada.", "TaskManager")
         
     def decompose_goal(self, goal_to_decompose):
         agent_display_name = "Task Manager (Decomposição)"
@@ -303,7 +312,7 @@ class TaskManager:
         planner_gen_config = { 
             "response_mime_type": "application/json",
             "response_schema": List[str],
-            "temperature": 0.2 # Baixa temperatura para planejamento determinístico
+            "temperature": 0.2 
         }
 
         response = call_gemini_api_with_retry(
@@ -325,7 +334,7 @@ class TaskManager:
         return [goal_to_decompose]
     
     def run_workflow(self):
-        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.23)...")
+        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.24)...")
         self.current_task_list = self.decompose_goal(self.goal)
         
         if not self.current_task_list:
@@ -350,7 +359,7 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v10.23 (Orquestração Automática)"
+    SCRIPT_VERSION = "v10.24 (Geração de Imagem com Padrão Corrigido)"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
     
