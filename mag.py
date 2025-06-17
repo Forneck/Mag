@@ -27,14 +27,12 @@ MAX_API_RETRIES = 3
 INITIAL_RETRY_DELAY_SECONDS = 5
 RETRY_BACKOFF_FACTOR = 2
 
-# --- Modelos Gemini ---
-# Usando modelos recentes que têm excelente suporte a 'tool use' e 'thinking'.
-GEMINI_TEXT_MODEL_NAME = "gemini-2.5-flash-preview-05-20" # O modelo Pro é ideal para 'thinking'
-GEMINI_IMAGE_MODEL_NAME = "gemini-2.0-flash-preview-image-generation" 
+# --- Modelos Gemini (CORRIGIDO) ---
+GEMINI_TEXT_MODEL_NAME = "gemini-1.5-flash-latest" # Usando o 1.5 Flash que tem bom suporte a 'tool use'
+GEMINI_IMAGE_MODEL_NAME = "imagemaker-1.0-preview" # Modelo dedicado para imagens conforme a nova documentação
 
 # --- Funções de Utilidade ---
 def sanitize_filename(name, allow_extension=True):
-    """Limpa e sanitiza um nome de arquivo para evitar problemas de segurança e de sistema de arquivos."""
     if not name: return ""
     base_name, ext = os.path.splitext(name)
     base_name = re.sub(r'[^\w\s.-]', '', base_name).strip()
@@ -44,7 +42,6 @@ def sanitize_filename(name, allow_extension=True):
     return base_name + ext
 
 def log_message(message, source="Sistema"):
-    """Escreve uma mensagem no arquivo de log com timestamp."""
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     full_log_message = f"[{timestamp}] [{source}]: {message}\n"
     try:
@@ -74,7 +71,6 @@ safety_settings_gemini = [
 ]
 
 # --- Ferramentas para o Agente ---
-@genai.tool
 def save_file(filename: str, content: str) -> str:
     """Salva o conteúdo textual fornecido em um arquivo com o nome especificado."""
     try:
@@ -88,24 +84,19 @@ def save_file(filename: str, content: str) -> str:
         log_message(f"Erro ao salvar arquivo '{filename}' via ferramenta: {e}", "Tool:save_file")
         return f"Erro ao salvar o arquivo '{filename}': {str(e)}"
 
-@genai.tool
 def generate_image(image_prompt: str) -> str:
     """Gera uma imagem com base em uma descrição textual detalhada (prompt) e a salva como um arquivo PNG."""
     try:
         log_message(f"Iniciando geração de imagem com o prompt: '{image_prompt[:100]}...'", "Tool:generate_image")
         image_model = genai.GenerativeModel(GEMINI_IMAGE_MODEL_NAME)
         
-        # A API para geração de imagem com o 1.5 Pro espera o prompt diretamente
-        response = image_model.generate_content(
-            f"Gere uma imagem com base na seguinte descrição: {image_prompt}",
-        )
+        # O modelo 'imagemaker' espera o prompt diretamente
+        response = image_model.generate_content(image_prompt)
         
-        image_part = next((part for part in response.candidates[0].content.parts if part.mime_type.startswith("image/")), None)
-        if not image_part:
-             return "Erro: A API não retornou dados de imagem na resposta. Verifique o prompt ou o modelo."
+        image_bytes = response.candidates[0].content.parts[0].blob.data
+        if not image_bytes:
+             return "Erro: A API não retornou dados de imagem na resposta."
 
-        image_bytes = image_part.blob.data
-        
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         fn_base = sanitize_filename(f"imagem_{image_prompt[:20]}_{ts}")
         filename = f"{fn_base}.png"
@@ -122,21 +113,89 @@ def generate_image(image_prompt: str) -> str:
 
 AGENT_TOOLS = [save_file, generate_image]
 
-# --- Funções Auxiliares de Comunicação ---
+# --- Funções de Comunicação e Arquivos (RESTAURADO) ---
 def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
 def print_user_message(message): print(f"\n👤 [Usuário]: {message}"); log_message(message, "Usuário")
 
+def get_most_recent_cache_file():
+    try:
+        list_of_files = glob.glob(os.path.join(UPLOADED_FILES_CACHE_DIR, "uploaded_files_info_*.json"))
+        return max(list_of_files, key=os.path.getctime) if list_of_files else None
+    except Exception as e: log_message(f"Erro ao buscar cache mais recente: {e}", "Sistema"); return None
+
+def load_cached_files_metadata(cache_file_path):
+    if not cache_file_path or not os.path.exists(cache_file_path): return []
+    try:
+        with open(cache_file_path, "r", encoding="utf-8") as f: cached_metadata = json.load(f)
+        return cached_metadata if isinstance(cached_metadata, list) else []
+    except Exception as e: log_message(f"Erro ao carregar cache {cache_file_path}: {e}", "Sistema"); return []
+
+def get_uploaded_files_info_from_user():
+    uploaded_file_objects, uploaded_files_metadata, reused_ids = [], [], set()
+    api_files_list = []
+    try: api_files_list = list(genai.list_files())
+    except Exception as e: log_message(f"Falha API list_files: {e}", "Sistema")
+    
+    api_files_dict = {f.name: f for f in api_files_list}
+    cached_metadata_from_file = load_cached_files_metadata(get_most_recent_cache_file())
+    offer_for_reuse_metadata_list = []
+
+    for api_file in api_files_list:
+        meta_from_cache = next((cm for cm in cached_metadata_from_file if cm.get("file_id") == api_file.name), {})
+        display_name = meta_from_cache.get("display_name", api_file.display_name)
+        user_path = meta_from_cache.get("user_path", "API (sem cache local)")
+        mime_type = meta_from_cache.get("mime_type", api_file.mime_type)
+        offer_for_reuse_metadata_list.append({
+            "file_id": api_file.name, "display_name": display_name,
+            "mime_type": mime_type, "user_path": user_path
+        })
+
+    if offer_for_reuse_metadata_list:
+        print_agent_message("Sistema", "Arquivos na API/cache:")
+        for i, m in enumerate(offer_for_reuse_metadata_list): print(f"  {i+1}. {m['display_name']} (Origem: {m['user_path']})")
+        if input("👤 Reutilizar arquivos? (s/n) ➡️ ").lower() == 's':
+            choices = input("👤 Números (ex: 1,3) ou 'todos': ➡️ ").lower()
+            sel_indices = list(range(len(offer_for_reuse_metadata_list))) if choices == 'todos' else [int(x.strip())-1 for x in choices.split(',') if x.strip().isdigit()]
+            for idx in sel_indices:
+                if 0 <= idx < len(offer_for_reuse_metadata_list):
+                    chosen_meta = offer_for_reuse_metadata_list[idx]
+                    try:
+                        file_obj = api_files_dict.get(chosen_meta["file_id"]) or genai.get_file(name=chosen_meta["file_id"])
+                        uploaded_file_objects.append(file_obj); uploaded_files_metadata.append(chosen_meta); reused_ids.add(chosen_meta["file_id"])
+                        print_agent_message("Sistema", f"✅ Arquivo '{file_obj.display_name}' reutilizado.")
+                    except Exception as e: log_message(f"Erro ao obter '{chosen_meta['display_name']}' para reutilização: {e}", "Sistema")
+    
+    if input("👤 Adicionar NOVOS arquivos? (s/n) ➡️ ").lower() == 's':
+        while True:
+            fp_pattern = input("👤 Caminho/padrão (ou 'fim'): ➡️ ").strip()
+            if fp_pattern.lower() == 'fim': break
+            
+            expanded_paths = glob.glob(fp_pattern, recursive=True) if any(c in fp_pattern for c in ['*','?']) else ([fp_pattern] if os.path.exists(fp_pattern) else [])
+            expanded_files = [f for f in expanded_paths if os.path.isfile(f)] 
+
+            if not expanded_files: print_agent_message("Sistema", f"❌ Nenhum arquivo encontrado para: '{fp_pattern}'"); continue
+            
+            for fp in expanded_files:
+                dn = os.path.basename(fp)
+                try:
+                    print_agent_message("Sistema", f"Fazendo upload de '{dn}'...")
+                    file_obj = genai.upload_file(path=fp, display_name=dn)
+                    uploaded_file_objects.append(file_obj)
+                    new_meta = {"file_id": file_obj.name, "display_name": dn, "mime_type": file_obj.mime_type, "user_path": fp}
+                    uploaded_files_metadata.append(new_meta)
+                    print_agent_message("Sistema", f"✅ Novo arquivo '{dn}' (ID: {file_obj.name}) enviado.")
+                    time.sleep(1)
+                except Exception as e: log_message(f"Erro upload '{dn}': {e}", "Sistema"); print_agent_message("Sistema", f"❌ Erro no upload de '{dn}': {e}")
+    if uploaded_files_metadata:
+        with open(os.path.join(UPLOADED_FILES_CACHE_DIR, f"uploaded_files_info_{CURRENT_TIMESTAMP_STR}.json"), "w", encoding="utf-8") as f: json.dump(uploaded_files_metadata, f, indent=4)
+    return uploaded_file_objects, uploaded_files_metadata
+
+
 def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GEMINI_TEXT_MODEL_NAME, gen_config_dict=None, system_instruction=None, tools=None):
-    """Função de chamada à API Gemini, agora com suporte a 'thinking_config' dentro de gen_config_dict."""
     log_message(f"Iniciando chamada à API Gemini para {agent_name} (Modelo: {model_name})...", "Sistema")
     
-    # --- MUDANÇA AQUI: Usa um dicionário para a configuração de geração ---
     active_gen_config = gen_config_dict or {}
-    # Garante que os parâmetros padrão estejam presentes se não forem fornecidos
     active_gen_config.setdefault("temperature", 0.7)
-    active_gen_config.setdefault("top_p", 0.95)
-    active_gen_config.setdefault("top_k", 64)
-    active_gen_config.setdefault("max_output_tokens", 8192)
 
     log_message(f"Usando generation_config: {active_gen_config}", "Sistema")
     
@@ -144,14 +203,14 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", model_name=GE
     for attempt in range(MAX_API_RETRIES):
         log_message(f"Tentativa {attempt + 1}/{MAX_API_RETRIES} para {agent_name}...", "Sistema")
         try:
-            content_parts = [genai.Part.from_text(str(p)) if not isinstance(p, genai.types.PartType) else p for p in prompt_parts]
+            # CORREÇÃO AQUI: Verificação de tipo mais segura
+            content_parts = [genai.Part.from_text(p) if isinstance(p, str) else p for p in prompt_parts]
 
             model_instance = genai.GenerativeModel(
                 model_name,
                 system_instruction=system_instruction, 
                 tools=tools 
             )
-            # A configuração é passada diretamente para generate_content
             response = model_instance.generate_content(
                 content_parts,
                 generation_config=active_gen_config 
@@ -176,14 +235,14 @@ class Worker:
             "Pense passo a passo e use as ferramentas para alcançar o objetivo. "
             "Ao final, forneça um resumo conciso do que foi feito."
         )
-        log_message("Instância do Worker (v10.2 com Thinking) criada.", "Worker")
+        log_message("Instância do Worker (v10.3) criada.", "Worker")
 
     def execute_task(self, sub_task_description, previous_results, uploaded_files_info, original_goal):
         agent_display_name = "Worker"
         print_agent_message(agent_display_name, f"Executando: '{sub_task_description}'")
 
         prompt_context = f"Resultados de tarefas anteriores: {json.dumps(previous_results) if previous_results else 'Nenhum.'}"
-        files_prompt_part = f"Arquivos de referência: {json.dumps([f['display_name'] for f in uploaded_files_info]) if uploaded_files_info else 'Nenhum.'}"
+        files_prompt_part = f"Arquivos de referência: {[f['display_name'] for f in uploaded_files_info]}"
         
         prompt_parts = [
             f"Contexto: {prompt_context}\n{files_prompt_part}",
@@ -191,9 +250,10 @@ class Worker:
             f"\nSua tarefa específica agora é: \"{sub_task_description}\"",
             "Execute a tarefa. Use as ferramentas disponíveis para pensar e agir."
         ]
+        if self.task_manager.uploaded_file_objects:
+             prompt_parts.extend(self.task_manager.uploaded_file_objects)
         
-        # --- MUDANÇA AQUI: Habilitando o Thinking para o Worker ---
-        worker_gen_config = { "thinking_config": {"thinking_budget": 2048} }
+        worker_gen_config = { "thinking_config": {"thinking_budget": -1} } # Orçamento dinâmico
 
         response = call_gemini_api_with_retry(
             prompt_parts,
@@ -205,11 +265,10 @@ class Worker:
         )
 
         if response is None:
-            return {"text_content": "Falha: Sem resposta da API.", "saved_files": []}, []
+            return {"text_content": "Falha: Sem resposta da API."}, []
         
-        final_text_response = response.text if hasattr(response, 'text') else "Ação concluída através de ferramentas."
-        log_message(f"Resposta final do Worker: {final_text_response[:500]}...", agent_display_name)
-        return {"text_content": final_text_response, "saved_files": []}, []
+        final_text_response = response.text if hasattr(response, 'text') and response.text else "Ação concluída através de ferramentas."
+        return {"text_content": final_text_response}, []
 
 
 class TaskManager:
@@ -224,42 +283,41 @@ class TaskManager:
             "Você é um Gerenciador de Tarefas especialista. Sua função é decompor uma meta principal em um plano de sub-tarefas sequenciais, claras e executáveis. "
             "Retorne o plano como um array JSON de strings. "
         )
-        log_message("Instância do TaskManager (v10.2 com Thinking) criada.", "TaskManager")
+        log_message("Instância do TaskManager (v10.3) criada.", "TaskManager")
         
     def decompose_goal(self, goal_to_decompose):
         agent_display_name = "Task Manager (Decomposição)"
         print_agent_message(agent_display_name, f"Decompondo meta: '{goal_to_decompose}'")
 
         prompt_parts = [ f"Meta Principal a ser decomposta: \"{goal_to_decompose}\"" ]
+        if self.uploaded_file_objects:
+             prompt_parts.extend(self.uploaded_file_objects)
         
-        # --- MUDANÇA AQUI: Habilitando o Thinking para o Planejamento ---
         planner_gen_config = { "thinking_config": {"thinking_budget": 1024} }
 
         response = call_gemini_api_with_retry(
             prompt_parts, 
             agent_display_name, 
             system_instruction=self.system_instruction,
-            tools=AGENT_TOOLS, # Fornecer ferramentas ao planejador permite que ele verifique o estado antes de planejar
+            tools=AGENT_TOOLS,
             gen_config_dict=planner_gen_config
         )
         
         if response and hasattr(response, 'text') and response.text:
             response_text = response.text
-            log_message(f"Resposta da decomposição (bruta): {response_text}", agent_display_name)
             try:
                 match = re.search(r'```json\s*([\s\S]*?)\s*```', response_text, re.DOTALL)
                 json_str = match.group(1).strip() if match else response_text
-                
                 tasks = json.loads(json_str)
                 if isinstance(tasks, list) and all(isinstance(task, str) for task in tasks):
                     return tasks
             except (json.JSONDecodeError, AttributeError, TypeError) as e:
-                log_message(f"Erro ao processar JSON da decomposição: {e}. Usando fallback.", agent_display_name)
+                log_message(f"Erro ao processar JSON da decomposição: {e}. Usando fallback.", "TaskManager")
         
         return [goal_to_decompose]
     
     def run_workflow(self):
-        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.2)...")
+        print_agent_message("TaskManager", "Iniciando fluxo de trabalho (v10.3)...")
         self.current_task_list = self.decompose_goal(self.goal)
         
         if not self.current_task_list:
@@ -282,12 +340,20 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v10.2 (Thinking Config)"
+    SCRIPT_VERSION = "v10.3 (Correções Finais)"
     log_message(f"--- Início da Execução ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
     
+    # Lógica de upload de arquivos restaurada
+    uploaded_files, uploaded_files_meta = get_uploaded_files_info_from_user()
+    
     print_user_message("🎯 Defina a meta principal (digite 'FIM' em uma nova linha para concluir):")
-    lines = [line for line in iter(input, "FIM")]
+    lines = []
+    while True:
+        line = input()
+        if line.strip().upper() == 'FIM':
+            break
+        lines.append(line)
     initial_goal_input = "\n".join(lines)
 
     log_message(f"Meta recebida do usuário:\n---\n{initial_goal_input}\n---", "Usuário")
@@ -295,7 +361,7 @@ if __name__ == "__main__":
     if not initial_goal_input.strip():
         print("Nenhuma meta definida. Encerrando.")
     else:
-        task_manager = TaskManager(initial_goal_input)
+        task_manager = TaskManager(initial_goal_input, uploaded_files, uploaded_files_meta)
         task_manager.run_workflow()
 
     log_message(f"--- Fim da Execução ({SCRIPT_VERSION}) ---", "Sistema")
