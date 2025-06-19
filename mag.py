@@ -1,6 +1,6 @@
+
 from google import genai
 from google.genai import types
-from google.genai import types, GoogleSearch # <--- Adicione GoogleSearch aqui
 import os
 import json
 import time
@@ -33,6 +33,14 @@ RETRY_BACKOFF_FACTOR = 2
 GEMINI_TEXT_MODEL_NAME = "gemini-2.5-flash-preview-05-20"
 GEMINI_IMAGE_MODEL_NAME = "gemini-2.0-flash-preview-image-generation"
 
+# --- Configurações de Segurança Gemini ---
+safety_settings_gemini=[
+    {"category":"HARM_CATEGORY_HARASSMENT","threshold":"BLOCK_MEDIUM_AND_ABOVE"},
+    {"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"BLOCK_MEDIUM_AND_ABOVE"},
+    {"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"BLOCK_NONE"},
+    {"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"BLOCK_NONE"}
+]
+
 # --- Funções de Utilidade ---
 def sanitize_filename(name, allow_extension=True):
     if not name: return ""
@@ -45,7 +53,7 @@ def sanitize_filename(name, allow_extension=True):
 
 def log_message(message, source="Sistema"):
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    full_log_message = f"[{timestamp}] [{source}]: {message}\n"
+    full_log_message = f"[{timestamp}] [{source}]: {message}\\n"
     try:
         with open(LOG_FILE_NAME, "a", encoding="utf-8") as f: f.write(full_log_message)
     except Exception as e: print(f"Erro ao escrever no log: {e}")
@@ -87,7 +95,11 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
             log_message(f"Usando imagem base: {base_image_path}", "Tool:generate_image")
             contents.append(Image.open(base_image_path))
         
-        response = client.models.generate_content(model=GEMINI_IMAGE_MODEL_NAME, contents=contents)
+        response = client.models.generate_content(
+            model=GEMINI_IMAGE_MODEL_NAME,
+            contents=contents,
+            safety_settings=safety_settings_gemini # Adicionada as safety_settings aqui
+        )
         image_part = next((p for p in response.candidates[0].content.parts if hasattr(p, 'inline_data') and p.inline_data), None)
         image_bytes = image_part.inline_data.data if image_part else None
         if not image_bytes: return {"status": "error", "message": "API não retornou imagem."}
@@ -99,17 +111,19 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
         log_message(f"Imagem salva: '{filename}'.", "Tool:generate_image")
         return {"status": "success", "message": f"Imagem salva como '{filename}'."}
     except Exception as e:
-        log_message(f"Erro em generate_image: {e}\n{traceback.format_exc()}", "Tool:generate_image")
+        log_message(f"Erro em generate_image: {e}\\n{traceback.format_exc()}", "Tool:generate_image")
         return {"status": "error", "message": f"Erro ao gerar imagem: {e}"}
 
 
+#code_execution_tool = types.Tool(code_execution=types.ToolCodeExecution())
 google_search_tool_instance = types.Tool(google_search=types.GoogleSearch())
 AVAILABLE_TOOLS = {"save_file": save_file, "generate_image": generate_image, "google_search": google_search_tool_instance}
+#"code_execution_tool": code_execution_tool}
 
 # --- Funções de Comunicação e Arquivos ---
-def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
-def print_user_message(message): print(f"\n👤 [Usuário]: {message}"); log_message(message, "Usuário")
-def print_thought_message(message): print(f"\n🧠 [Pensamento]:\n{message}"); log_message(f"PENSAMENTO:\n{message}", "Agente")
+def print_agent_message(agent_name, message): print(f"\\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
+def print_user_message(message): print(f"\\n👤 [Usuário]: {message}"); log_message(message, "Usuário")
+def print_thought_message(message): print(f"\\n🧠 [Pensamento]:\\n{message}"); log_message(f"PENSAMENTO:\\n{message}", "Agente")
 
 def get_uploaded_files_info_from_user():
     uploaded_file_objects, uploaded_files_metadata = [], []
@@ -184,23 +198,27 @@ def get_uploaded_files_info_from_user():
 def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", gen_config_dict=None):
     log_message(f"Chamando API para {agent_name}...", "Sistema")
     
-    final_config_obj = types.GenerateContentConfig(**gen_config_dict) if gen_config_dict else None
+    if gen_config_dict is None:
+        gen_config_dict = {}
+    
+    # Adiciona as safety_settings ao dicionário gen_config_dict
+    gen_config_dict['safety_settings'] = safety_settings_gemini
+
+    final_config_obj = types.GenerateContentConfig(**gen_config_dict)
     log_message(f"Usando config: {final_config_obj}", "Sistema")
     
     current_retry_delay = INITIAL_RETRY_DELAY_SECONDS
     for attempt in range(MAX_API_RETRIES):
         log_message(f"Tentativa {attempt + 1}/{MAX_API_RETRIES}...", "Sistema")
         try:
-            # --- CORREÇÃO APLICADA AQUI ---
-            # A chamada está agora dentro do bloco 'try', corrigindo o erro de sintaxe.
             response = client.models.generate_content(
                 model=GEMINI_TEXT_MODEL_NAME,
                 contents=prompt_parts,
-                config=final_config_obj
+                config=final_config_obj 
             )
             return response
         except Exception as e:
-            log_message(f"Exceção: {type(e).__name__} - {e}\n{traceback.format_exc()}", "Sistema")
+            log_message(f"Exceção: {type(e).__name__} - {e}\\n{traceback.format_exc()}", "Sistema")
             if attempt < MAX_API_RETRIES - 1:
                 time.sleep(current_retry_delay)
                 current_retry_delay *= RETRY_BACKOFF_FACTOR
@@ -226,13 +244,11 @@ class Worker:
         conversation_history = []
         if self.task_manager.uploaded_file_objects:
              conversation_history.extend(self.task_manager.uploaded_file_objects)
-        conversation_history.append(f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\n"
-                                    f"Objetivo Geral: {original_goal}\n\n"
-                                    f"Sua tarefa agora: \"{task_description}\"."
+        conversation_history.append(f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\\n"
+                                    f"Objetivo Geral: {original_goal}\\n\\n"
+                                    f"Sua tarefa agora: \\"{task_description}\\"."
         )
         
-        # --- CORREÇÃO APLICADA AQUI ---
-        # Passando as funções diretamente, como na documentação "Automatic Function Calling".
         gen_config = {
             "tools": list(AVAILABLE_TOOLS.values()),
             "thinking_config": types.ThinkingConfig(include_thoughts=True)
@@ -244,8 +260,6 @@ class Worker:
 
         extract_and_print_thoughts(response)
         
-        # O SDK lida com o ciclo de chamadas de função automaticamente.
-        # A resposta final já é o texto resumido.
         return {"text_content": response.text.strip() if response.text else "Ação concluída."}, []
 
 class TaskManager:
@@ -257,7 +271,7 @@ class TaskManager:
         self.worker = Worker(self)
         self.system_instruction = (
             "Você é um Gerenciador de Tarefas especialista. Decomponha a meta principal em sub-tarefas sequenciais e executáveis. "
-            "Sua resposta DEVE ser um objeto JSON bem formado contendo uma única chave 'tasks', que é uma lista de strings. Exemplo: {\"tasks\": [\"Passo 1\", \"Passo 2\"]}"
+            "Sua resposta DEVE ser um objeto JSON bem formado contendo uma única chave 'tasks', que é uma lista de strings. Exemplo: {\\"tasks\\": [\\"Passo 1\\", \\"Passo 2\\"]}"
         )
         log_message("TaskManager (v11.24) criado.", "TaskManager")
         
@@ -265,7 +279,7 @@ class TaskManager:
         agent_name = "Task Manager"
         print_agent_message(agent_name, f"Decompondo meta: '{self.goal}'")
 
-        prompt_text = (f"{self.system_instruction}\n\nMeta a ser decomposta: \"{self.goal}\"")
+        prompt_text = (f"{self.system_instruction}\\n\\nMeta a ser decomposta: \\"{self.goal}\\"")
         prompt_parts = []
         if self.uploaded_file_objects: prompt_parts.extend(self.uploaded_file_objects)
         prompt_parts.append(prompt_text)
@@ -319,7 +333,7 @@ if __name__ == "__main__":
     files, meta = get_uploaded_files_info_from_user()
     
     print_user_message("🎯 Defina a meta principal (digite 'FIM' para concluir):")
-    initial_goal = "\n".join(iter(input, 'FIM'))
+    initial_goal = "\\n".join(iter(input, 'FIM'))
 
     if not initial_goal.strip():
         print("Nenhuma meta definida.")
@@ -328,5 +342,4 @@ if __name__ == "__main__":
         TaskManager(initial_goal, files, meta).run_workflow()
 
     log_message(f"--- Fim ({SCRIPT_VERSION}) ---", "Sistema")
-    print(f"\n--- Execução ({SCRIPT_VERSION}) Finalizada ---")
-
+    print(f"\\n--- Execução ({SCRIPT_VERSION}) Finalizada ---")
