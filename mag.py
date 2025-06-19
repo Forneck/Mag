@@ -1,5 +1,6 @@
 from google import genai
 from google.genai import types
+from google.genai import types, GoogleSearch # <--- Adicione GoogleSearch aqui
 import os
 import json
 import time
@@ -101,7 +102,9 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
         log_message(f"Erro em generate_image: {e}\n{traceback.format_exc()}", "Tool:generate_image")
         return {"status": "error", "message": f"Erro ao gerar imagem: {e}"}
 
-AVAILABLE_TOOLS = {"save_file": save_file, "generate_image": generate_image}
+
+google_search_tool_instance = types.Tool(google_search=types.GoogleSearch())
+AVAILABLE_TOOLS = {"save_file": save_file, "generate_image": generate_image, "google_search": google_search_tool_instance}
 
 # --- Funções de Comunicação e Arquivos ---
 def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
@@ -121,11 +124,12 @@ def get_uploaded_files_info_from_user():
                 for file_obj in api_files_list:
                     try: client.files.delete(name=file_obj.name); time.sleep(0.2)
                     except Exception as e: log_message(f"Falha ao deletar {file_obj.name}: {e}", "Sistema")
-                print_agent_message("Sistema", "Limpeza concluída."); api_files_list = []
-            
+                print_agent_message("Sistema", "Limpeza concluída."); api_files_list = []                                                        
             if api_files_list:
                 print_agent_message("Sistema", "Arquivos restantes na API:")
-                for i, f in enumerate(api_files_list): print(f"  {i+1}. {f.display_name}")
+                for i, f in enumerate(api_files_list):
+                    display_name_to_show = f.display_name if f.display_name else f.name
+                    print(f"  {i+1}. {display_name_to_show}")
                 if input("👤 Reutilizar arquivos existentes? (s/n) ➡️ ").lower() == 's':
                     choices = input("👤 Números (ex: 1,3) ou 'todos': ➡️ ").lower()
                     sel_indices = list(range(len(api_files_list))) if choices == 'todos' else [int(x.strip()) - 1 for x in choices.split(',') if x.strip().isdigit()]
@@ -133,26 +137,48 @@ def get_uploaded_files_info_from_user():
                         if 0 <= idx < len(api_files_list):
                             file_obj = api_files_list[idx]
                             uploaded_file_objects.append(file_obj)
-                            uploaded_files_metadata.append({"file_id": file_obj.name, "display_name": file_obj.display_name})
-                            print_agent_message("Sistema", f"✅ '{file_obj.display_name}' selecionado.")
+                            meta_display_name = file_obj.display_name if file_obj.display_name else file_obj.name
+                            uploaded_files_metadata.append({"file_id": file_obj.name, "display_name": meta_display_name})
+                            print_agent_message("Sistema", f"✅ '{meta_display_name}' selecionado.")
     except Exception as e:
         log_message(f"Erro ao gerenciar arquivos da API: {e}", "Sistema")
         print_agent_message("Sistema", "AVISO: Não foi possível gerenciar arquivos da API.")
 
-    if input("👤 Fazer upload de novos arquivos? (s/n) ➡️ ").lower() == 's':
+    if input("👤 Fazer upload de novos arquivos? (s/n) (Suporta curingas como *.txt, pasta/*.md) ➡️ ").lower() == 's':
         while True:
-            fp = input("👤 Caminho do arquivo (ou 'fim'): ➡️ ").strip()
-            if fp.lower() == 'fim': break
-            if os.path.isfile(fp):
+            file_pattern = input("👤 Caminho do arquivo ou padrão (ex: *.txt, pasta/*.md) (ou 'fim'): ➡️ ").strip()
+            if file_pattern.lower() == 'fim': break
+
+            # Expandir o padrão usando glob
+            found_files = glob.glob(file_pattern)
+
+            if not found_files:
+                print_agent_message("Sistema", f"❌ Nenhum arquivo encontrado para o padrão: '{file_pattern}'. Tente novamente.")
+                continue
+
+            print_agent_message("Sistema", f"Encontrados {len(found_files)} arquivo(s) para o padrão '{file_pattern}':")
+            for f_path in found_files:
+                print(f"  - {f_path}")
+
+            if input("👤 Confirmar upload dos arquivos encontrados? (s/n) ➡️ ").lower() != 's':
+                print_agent_message("Sistema", "Upload cancelado para este padrão.")
+                continue
+
+            for fp in found_files:
                 dn = os.path.basename(fp)
                 try:
-                    print_agent_message("Sistema", f"Enviando '{dn}'...")
-                    file_obj = client.files.upload(file=fp)
-                    uploaded_file_objects.append(file_obj)
-                    uploaded_files_metadata.append({"file_id": file_obj.name, "display_name": dn})
-                    print_agent_message("Sistema", "✅ Enviado."); time.sleep(1)
-                except Exception as e: print_agent_message("Sistema", f"❌ Erro no upload de '{dn}': {e}")
-            else: print_agent_message("Sistema", "❌ Arquivo não encontrado.")
+                    if os.path.isfile(fp): # Adicional checagem caso o glob retorne algo que não é um arquivo direto
+                        print_agent_message("Sistema", f"Enviando '{dn}'...")
+                        file_obj = client.files.upload(file=fp)
+                        uploaded_file_objects.append(file_obj)
+                        uploaded_files_metadata.append({"file_id": file_obj.name, "display_name": dn})
+                        print_agent_message("Sistema", f"✅ '{dn}' enviado."); time.sleep(0.5) # Pequena pausa para evitar sobrecarga da API
+                    else:
+                        print_agent_message("Sistema", f"ℹ️ '{fp}' não é um arquivo válido e será ignorado.")
+                except Exception as e:
+                    print_agent_message("Sistema", f"❌ Erro no upload de '{dn}': {e}")
+                    log_message(f"Erro no upload de '{dn}': {e}", "Sistema")
+            print_agent_message("Sistema", f"Concluído o processamento do padrão '{file_pattern}'.")
     return uploaded_file_objects, uploaded_files_metadata
 
 def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", gen_config_dict=None):
@@ -202,7 +228,8 @@ class Worker:
              conversation_history.extend(self.task_manager.uploaded_file_objects)
         conversation_history.append(f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\n"
                                     f"Objetivo Geral: {original_goal}\n\n"
-                                    f"Sua tarefa agora: \"{task_description}\".")
+                                    f"Sua tarefa agora: \"{task_description}\"."
+        )
         
         # --- CORREÇÃO APLICADA AQUI ---
         # Passando as funções diretamente, como na documentação "Automatic Function Calling".
@@ -302,5 +329,4 @@ if __name__ == "__main__":
 
     log_message(f"--- Fim ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"\n--- Execução ({SCRIPT_VERSION}) Finalizada ---")
-
 
