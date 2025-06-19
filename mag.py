@@ -116,14 +116,15 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
 
 
 #code_execution_tool = types.Tool(code_execution=types.ToolCodeExecution())
-google_search_tool_instance = types.Tool(google_search=types.GoogleSearch())
-AVAILABLE_TOOLS = {"save_file": save_file, "generate_image": generate_image, "google_search": google_search_tool_instance}
-#"code_execution_tool": code_execution_tool}
+#google_search_tool_instance = types.Tool(google_search=types.GoogleSearch())
+AVAILABLE_TOOLS = {"save_file": save_file, "generate_image": generate_image}
+#, "google_search": google_search_tool_instance}
+#,"code_execution_tool": code_execution_tool}
 
 # --- Funções de Comunicação e Arquivos ---
-def print_agent_message(agent_name, message): print(f"\\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
-def print_user_message(message): print(f"\\n👤 [Usuário]: {message}"); log_message(message, "Usuário")
-def print_thought_message(message): print(f"\\n🧠 [Pensamento]:\\n{message}"); log_message(f"PENSAMENTO:\\n{message}", "Agente")
+def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
+def print_user_message(message): print(f"\n👤 [Usuário]: {message}"); log_message(message, "Usuário")
+def print_thought_message(message): print(f"\n🧠 [Pensamento]:\\n{message}"); log_message(f"PENSAMENTO:\n{message}", "Agente")
 
 def get_uploaded_files_info_from_user():
     uploaded_file_objects, uploaded_files_metadata = [], []
@@ -244,10 +245,10 @@ class Worker:
         conversation_history = []
         if self.task_manager.uploaded_file_objects:
              conversation_history.extend(self.task_manager.uploaded_file_objects)
-        conversation_history.append(f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\\n"
-                                    f"Objetivo Geral: {original_goal}\\n\\n"
-                                    f"Sua tarefa agora: \\"{task_description}\\"."
-        )
+        
+        conversation_history.append(f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\n"
+                                    f"Objetivo Geral: {original_goal}\n\n"
+                                    f"Sua tarefa agora: \\'{task_description}\\'. ")
         
         gen_config = {
             "tools": list(AVAILABLE_TOOLS.values()),
@@ -271,15 +272,15 @@ class TaskManager:
         self.worker = Worker(self)
         self.system_instruction = (
             "Você é um Gerenciador de Tarefas especialista. Decomponha a meta principal em sub-tarefas sequenciais e executáveis. "
-            "Sua resposta DEVE ser um objeto JSON bem formado contendo uma única chave 'tasks', que é uma lista de strings. Exemplo: {\\"tasks\\": [\\"Passo 1\\", \\"Passo 2\\"]}"
+            "Sua resposta DEVE ser um objeto JSON bem formado contendo uma única chave 'tasks', que é uma lista de strings. Exemplo: {\\'tasks\\': [\\'Passo 1\\', \\'Passo 2\\']}"
         )
-        log_message("TaskManager (v11.24) criado.", "TaskManager")
+        log_message("TaskManager (v11.25) criado.", "TaskManager")
         
     def decompose_goal(self):
         agent_name = "Task Manager"
         print_agent_message(agent_name, f"Decompondo meta: '{self.goal}'")
 
-        prompt_text = (f"{self.system_instruction}\\n\\nMeta a ser decomposta: \\"{self.goal}\\"")
+        prompt_text = (f"{self.system_instruction}\n\nMeta a ser decomposta: \\'{self.goal}\\'")
         prompt_parts = []
         if self.uploaded_file_objects: prompt_parts.extend(self.uploaded_file_objects)
         prompt_parts.append(prompt_text)
@@ -326,14 +327,14 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v11.24 (Automatic Tool Calling)"
+    SCRIPT_VERSION = "v11.25 (Automatic Tool Calling)"
     log_message(f"--- Início ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
     
     files, meta = get_uploaded_files_info_from_user()
     
     print_user_message("🎯 Defina a meta principal (digite 'FIM' para concluir):")
-    initial_goal = "\\n".join(iter(input, 'FIM'))
+    initial_goal = "\n".join(iter(input, 'FIM'))
 
     if not initial_goal.strip():
         print("Nenhuma meta definida.")
