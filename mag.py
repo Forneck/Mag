@@ -1,6 +1,6 @@
 
-from google import genai
-from google.genai import types
+import google.generativeai as genai
+from google.generativeai import types
 import os
 import json
 import time
@@ -30,7 +30,8 @@ INITIAL_RETRY_DELAY_SECONDS = 5
 RETRY_BACKOFF_FACTOR = 2
 
 # --- Modelos Gemini ---
-GEMINI_TEXT_MODEL_NAME = "gemini-2.5-flash-preview-05-20"
+# Updated to latest Gemini 2.5 preview models
+GEMINI_TEXT_MODEL_NAME = "gemini-2.5-flash-preview"
 GEMINI_IMAGE_MODEL_NAME = "gemini-2.0-flash-preview-image-generation"
 
 # --- Configurações de Segurança Gemini ---
@@ -63,7 +64,7 @@ try:
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         raise ValueError("A variável de ambiente GEMINI_API_KEY não está definida.")
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    genai.configure(api_key=GEMINI_API_KEY)
     log_message("API Gemini configurada.", "Sistema")
 except Exception as e:
     print(f"Erro na configuração da API Gemini: {e}")
@@ -95,8 +96,8 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
             log_message(f"Usando imagem base: {base_image_path}", "Tool:generate_image")
             contents.append(Image.open(base_image_path))
         
-        response = client.models.generate_content(
-            model=GEMINI_IMAGE_MODEL_NAME,
+        model = genai.GenerativeModel(GEMINI_IMAGE_MODEL_NAME)
+        response = model.generate_content(
             contents=contents,
             safety_settings=safety_settings_gemini # Adicionada as safety_settings aqui
         )
@@ -115,11 +116,47 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
         return {"status": "error", "message": f"Erro ao gerar imagem: {e}"}
 
 
-#code_execution_tool = types.Tool(code_execution=types.ToolCodeExecution())
-#google_search_tool_instance = types.Tool(google_search=types.GoogleSearch())
+# Define tools using the new API format
+save_file_tool = genai.types.FunctionDeclaration(
+    name="save_file",
+    description="Salva o conteúdo textual fornecido em um arquivo com o nome especificado",
+    parameters={
+        "type": "object",
+        "properties": {
+            "filename": {
+                "type": "string",
+                "description": "Nome do arquivo a ser salvo"
+            },
+            "content": {
+                "type": "string", 
+                "description": "Conteúdo textual a ser salvo no arquivo"
+            }
+        },
+        "required": ["filename", "content"]
+    }
+)
+
+generate_image_tool = genai.types.FunctionDeclaration(
+    name="generate_image",
+    description="Gera ou edita uma imagem a partir de um prompt em inglês",
+    parameters={
+        "type": "object",
+        "properties": {
+            "image_prompt_in_english": {
+                "type": "string",
+                "description": "Prompt em inglês para gerar a imagem"
+            },
+            "base_image_path": {
+                "type": "string",
+                "description": "Caminho opcional para uma imagem base para edição"
+            }
+        },
+        "required": ["image_prompt_in_english"]
+    }
+)
+
 AVAILABLE_TOOLS = {"save_file": save_file, "generate_image": generate_image}
-#, "google_search": google_search_tool_instance}
-#,"code_execution_tool": code_execution_tool}
+AVAILABLE_TOOL_DECLARATIONS = [save_file_tool, generate_image_tool]
 
 # --- Funções de Comunicação e Arquivos ---
 def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
@@ -130,14 +167,14 @@ def get_uploaded_files_info_from_user():
     uploaded_file_objects, uploaded_files_metadata = [], []
     try:
         print_agent_message("Sistema", "Verificando arquivos na API...")
-        api_files_list = list(client.files.list())
+        api_files_list = list(genai.list_files())
         log_message(f"Encontrados {len(api_files_list)} arquivos na API.")
         if api_files_list:
             print_agent_message("Sistema", f"Encontrados {len(api_files_list)} arquivos existentes.")
             if input("👤 Deseja limpar TODOS os arquivos da API? (s/n) ➡️ ").lower() == 's':
                 print_agent_message("Sistema", "Limpando arquivos...")
                 for file_obj in api_files_list:
-                    try: client.files.delete(name=file_obj.name); time.sleep(0.2)
+                    try: genai.delete_file(name=file_obj.name); time.sleep(0.2)
                     except Exception as e: log_message(f"Falha ao deletar {file_obj.name}: {e}", "Sistema")
                 print_agent_message("Sistema", "Limpeza concluída."); api_files_list = []                                                        
             if api_files_list:
@@ -184,7 +221,7 @@ def get_uploaded_files_info_from_user():
                 try:
                     if os.path.isfile(fp): # Adicional checagem caso o glob retorne algo que não é um arquivo direto
                         print_agent_message("Sistema", f"Enviando '{dn}'...")
-                        file_obj = client.files.upload(file=fp)
+                        file_obj = genai.upload_file(path=fp)
                         uploaded_file_objects.append(file_obj)
                         uploaded_files_metadata.append({"file_id": file_obj.name, "display_name": dn})
                         print_agent_message("Sistema", f"✅ '{dn}' enviado."); time.sleep(0.5) # Pequena pausa para evitar sobrecarga da API
@@ -202,21 +239,37 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", gen_config_di
     if gen_config_dict is None:
         gen_config_dict = {}
     
-    # Adiciona as safety_settings ao dicionário gen_config_dict
-    gen_config_dict['safety_settings'] = safety_settings_gemini
+    # Adiciona as safety_settings ao dicionário gen_config_dict se não estiver presente
+    if 'safety_settings' not in gen_config_dict:
+        gen_config_dict['safety_settings'] = safety_settings_gemini
 
-    final_config_obj = types.GenerateContentConfig(**gen_config_dict)
-    log_message(f"Usando config: {final_config_obj}", "Sistema")
+    # Create the model instance
+    model = genai.GenerativeModel(
+        model_name=GEMINI_TEXT_MODEL_NAME,
+        safety_settings=gen_config_dict.pop('safety_settings', safety_settings_gemini)
+    )
+    
+    # Remove safety_settings from gen_config_dict since it's passed to model
+    generation_config = genai.GenerationConfig(**{k: v for k, v in gen_config_dict.items() if k != 'tools'})
+    tools = gen_config_dict.get('tools', None)
+    
+    log_message(f"Usando config: {generation_config}", "Sistema")
     
     current_retry_delay = INITIAL_RETRY_DELAY_SECONDS
     for attempt in range(MAX_API_RETRIES):
         log_message(f"Tentativa {attempt + 1}/{MAX_API_RETRIES}...", "Sistema")
         try:
-            response = client.models.generate_content(
-                model=GEMINI_TEXT_MODEL_NAME,
-                contents=prompt_parts,
-                config=final_config_obj 
-            )
+            if tools:
+                response = model.generate_content(
+                    contents=prompt_parts,
+                    generation_config=generation_config,
+                    tools=tools
+                )
+            else:
+                response = model.generate_content(
+                    contents=prompt_parts,
+                    generation_config=generation_config
+                )
             return response
         except Exception as e:
             log_message(f"Exceção: {type(e).__name__} - {e}\\n{traceback.format_exc()}", "Sistema")
@@ -233,10 +286,62 @@ def extract_and_print_thoughts(response):
                 print_thought_message(part.text)
 
 # --- Classes dos Agentes ---
+
+class RouterAgent:
+    """Router agent que decide qual agente especializado usar para cada tarefa."""
+    
+    def __init__(self):
+        self.routing_instruction = (
+            "Você é um Router Agent especialista. Analise a tarefa fornecida e determine qual tipo de agente "
+            "é mais adequado para executá-la. Responda com um JSON contendo 'agent_type' e 'reasoning'. "
+            "Tipos disponíveis: 'text_worker' (tarefas de texto/código), 'image_worker' (geração de imagens), "
+            "'video_worker' (geração de vídeos), 'analysis_worker' (análise e pensamento complexo). "
+            "Exemplo: {'agent_type': 'text_worker', 'reasoning': 'Tarefa envolve processamento de texto'}"
+        )
+        log_message("RouterAgent criado.", "RouterAgent")
+    
+    def route_task(self, task_description, context=""):
+        """Decide qual agente deve executar a tarefa."""
+        print_agent_message("RouterAgent", f"Analisando roteamento para: '{task_description}'")
+        
+        prompt_parts = [
+            f"{self.routing_instruction}\n\n"
+            f"Contexto: {context}\n"
+            f"Tarefa a ser roteada: '{task_description}'\n\n"
+            f"Determine o melhor agente para esta tarefa."
+        ]
+        
+        gen_config = {
+            "temperature": 0.3,
+            "response_mime_type": "application/json"
+        }
+        
+        response = call_gemini_api_with_retry(prompt_parts, "RouterAgent", gen_config_dict=gen_config)
+        
+        if not response or not response.text:
+            log_message("Router falhou, usando text_worker como padrão", "RouterAgent")
+            return "text_worker", "Fallback para texto devido a falha no roteamento"
+        
+        try:
+            text_response = response.text.strip()
+            if text_response.startswith("```json"): 
+                text_response = text_response[7:-3].strip()
+            route_dict = json.loads(text_response)
+            
+            agent_type = route_dict.get("agent_type", "text_worker")
+            reasoning = route_dict.get("reasoning", "Sem justificativa fornecida")
+            
+            print_agent_message("RouterAgent", f"Roteado para: {agent_type} - {reasoning}")
+            return agent_type, reasoning
+            
+        except (json.JSONDecodeError, TypeError) as e:
+            log_message(f"Erro no parsing do router: {e}. Resposta: '{response.text}'", "RouterAgent")
+            return "text_worker", "Fallback para texto devido a erro de parsing"
+
 class Worker:
     def __init__(self, task_manager):
         self.task_manager = task_manager
-        log_message("Worker (v11.24) criado.", "Worker")
+        log_message("Worker (v11.26 - Gemini 2.5) criado.", "Worker")
 
     def execute_task(self, task_description, previous_results, files_info, original_goal):
         agent_name = "Worker"
@@ -251,8 +356,7 @@ class Worker:
                                     f"Sua tarefa agora: \\'{task_description}\\'. ")
         
         gen_config = {
-            "tools": list(AVAILABLE_TOOLS.values()),
-            "thinking_config": types.ThinkingConfig(include_thoughts=True)
+            "tools": AVAILABLE_TOOL_DECLARATIONS
         }
 
         response = call_gemini_api_with_retry(conversation_history, agent_name, gen_config_dict=gen_config)
@@ -261,7 +365,163 @@ class Worker:
 
         extract_and_print_thoughts(response)
         
+        # Handle function calls if any
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    function_name = part.function_call.name
+                    function_args = dict(part.function_call.args)
+                    
+                    if function_name in AVAILABLE_TOOLS:
+                        log_message(f"Executando função: {function_name} com args: {function_args}", "Worker")
+                        result = AVAILABLE_TOOLS[function_name](**function_args)
+                        log_message(f"Resultado da função {function_name}: {result}", "Worker")
+        
         return {"text_content": response.text.strip() if response.text else "Ação concluída."}, []
+
+class ImageWorker(Worker):
+    """Agente especializado em tarefas relacionadas a imagens."""
+    
+    def __init__(self, task_manager):
+        super().__init__(task_manager)
+        log_message("ImageWorker (v11.26) criado.", "ImageWorker")
+    
+    def execute_task(self, task_description, previous_results, files_info, original_goal):
+        agent_name = "ImageWorker"
+        print_agent_message(agent_name, f"Executando (imagem): '{task_description}'")
+
+        conversation_history = []
+        if self.task_manager.uploaded_file_objects:
+             conversation_history.extend(self.task_manager.uploaded_file_objects)
+        
+        conversation_history.append(
+            f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\n"
+            f"Objetivo Geral: {original_goal}\n\n"
+            f"TAREFA DE IMAGEM: {task_description}\n"
+            f"Foque especificamente em gerar, editar ou analisar imagens. "
+            f"Use a função generate_image quando apropriado."
+        )
+        
+        gen_config = {
+            "tools": AVAILABLE_TOOL_DECLARATIONS,
+            "temperature": 0.7  # Mais criatividade para imagens
+        }
+
+        response = call_gemini_api_with_retry(conversation_history, agent_name, gen_config_dict=gen_config)
+
+        if not response: return {"text_content": "Falha na API."}, []
+
+        extract_and_print_thoughts(response)
+        
+        # Handle function calls if any
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    function_name = part.function_call.name
+                    function_args = dict(part.function_call.args)
+                    
+                    if function_name in AVAILABLE_TOOLS:
+                        log_message(f"Executando função: {function_name} com args: {function_args}", agent_name)
+                        result = AVAILABLE_TOOLS[function_name](**function_args)
+                        log_message(f"Resultado da função {function_name}: {result}", agent_name)
+        
+        return {"text_content": response.text.strip() if response.text else "Imagem processada."}, []
+
+class AnalysisWorker(Worker):
+    """Agente especializado em análise e pensamento complexo."""
+    
+    def __init__(self, task_manager):
+        super().__init__(task_manager)
+        log_message("AnalysisWorker (v11.26) criado.", "AnalysisWorker")
+    
+    def execute_task(self, task_description, previous_results, files_info, original_goal):
+        agent_name = "AnalysisWorker"
+        print_agent_message(agent_name, f"Executando (análise): '{task_description}'")
+
+        conversation_history = []
+        if self.task_manager.uploaded_file_objects:
+             conversation_history.extend(self.task_manager.uploaded_file_objects)
+        
+        conversation_history.append(
+            f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\n"
+            f"Objetivo Geral: {original_goal}\n\n"
+            f"TAREFA DE ANÁLISE: {task_description}\n"
+            f"Pense profundamente sobre esta tarefa. Considere múltiplas perspectivas, "
+            f"analise dados e forneça insights detalhados. Use raciocínio estruturado."
+        )
+        
+        gen_config = {
+            "tools": AVAILABLE_TOOL_DECLARATIONS,
+            "temperature": 0.3  # Mais precisão para análise
+        }
+
+        response = call_gemini_api_with_retry(conversation_history, agent_name, gen_config_dict=gen_config)
+
+        if not response: return {"text_content": "Falha na API."}, []
+
+        extract_and_print_thoughts(response)
+        
+        # Handle function calls if any
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    function_name = part.function_call.name
+                    function_args = dict(part.function_call.args)
+                    
+                    if function_name in AVAILABLE_TOOLS:
+                        log_message(f"Executando função: {function_name} com args: {function_args}", agent_name)
+                        result = AVAILABLE_TOOLS[function_name](**function_args)
+                        log_message(f"Resultado da função {function_name}: {result}", agent_name)
+        
+        return {"text_content": response.text.strip() if response.text else "Análise concluída."}, []
+
+class VideoWorker(Worker):
+    """Agente especializado em tarefas relacionadas a vídeos (Veo3 quando disponível)."""
+    
+    def __init__(self, task_manager):
+        super().__init__(task_manager)
+        log_message("VideoWorker (v11.26 - Veo3 ready) criado.", "VideoWorker")
+    
+    def execute_task(self, task_description, previous_results, files_info, original_goal):
+        agent_name = "VideoWorker"
+        print_agent_message(agent_name, f"Executando (vídeo): '{task_description}'")
+
+        conversation_history = []
+        if self.task_manager.uploaded_file_objects:
+             conversation_history.extend(self.task_manager.uploaded_file_objects)
+        
+        conversation_history.append(
+            f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\n"
+            f"Objetivo Geral: {original_goal}\n\n"
+            f"TAREFA DE VÍDEO: {task_description}\n"
+            f"NOTA: Funcionalidade de vídeo (Veo3) ainda não implementada na API. "
+            f"Por ora, documente os requisitos e planeje a implementação futura."
+        )
+        
+        gen_config = {
+            "tools": AVAILABLE_TOOL_DECLARATIONS,
+            "temperature": 0.7
+        }
+
+        response = call_gemini_api_with_retry(conversation_history, agent_name, gen_config_dict=gen_config)
+
+        if not response: return {"text_content": "Falha na API."}, []
+
+        extract_and_print_thoughts(response)
+        
+        # Handle function calls if any
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    function_name = part.function_call.name
+                    function_args = dict(part.function_call.args)
+                    
+                    if function_name in AVAILABLE_TOOLS:
+                        log_message(f"Executando função: {function_name} com args: {function_args}", agent_name)
+                        result = AVAILABLE_TOOLS[function_name](**function_args)
+                        log_message(f"Resultado da função {function_name}: {result}", agent_name)
+        
+        return {"text_content": response.text.strip() if response.text else "Vídeo processado (planejado)."}, []
 
 class TaskManager:
     def __init__(self, initial_goal, uploaded_files, files_meta):
@@ -269,12 +529,27 @@ class TaskManager:
         self.uploaded_file_objects = uploaded_files or []
         self.uploaded_files_info = files_meta or []
         self.executed_tasks_results = []
-        self.worker = Worker(self)
+        
+        # Initialize router and specialized workers
+        self.router = RouterAgent()
+        self.text_worker = Worker(self)
+        self.image_worker = ImageWorker(self)
+        self.analysis_worker = AnalysisWorker(self)
+        self.video_worker = VideoWorker(self)
+        
+        # Map agent types to worker instances
+        self.worker_map = {
+            "text_worker": self.text_worker,
+            "image_worker": self.image_worker,
+            "analysis_worker": self.analysis_worker,
+            "video_worker": self.video_worker
+        }
+        
         self.system_instruction = (
             "Você é um Gerenciador de Tarefas especialista. Decomponha a meta principal em sub-tarefas sequenciais e executáveis. "
             "Sua resposta DEVE ser um objeto JSON bem formado contendo uma única chave 'tasks', que é uma lista de strings. Exemplo: {\\'tasks\\': [\\'Passo 1\\', \\'Passo 2\\']}"
         )
-        log_message("TaskManager (v11.25) criado.", "TaskManager")
+        log_message("TaskManager (v11.26 - Gemini 2.5 com Router) criado.", "TaskManager")
         
     def decompose_goal(self):
         agent_name = "Task Manager"
@@ -287,7 +562,6 @@ class TaskManager:
         
         gen_config = {
             "temperature": 0.5, 
-            "thinking_config": types.ThinkingConfig(include_thoughts=True),
             "response_mime_type": "application/json"
         }
         response = call_gemini_api_with_retry(prompt_parts, agent_name, gen_config_dict=gen_config)
@@ -316,7 +590,16 @@ class TaskManager:
             print_agent_message("TaskManager", "Plano não aprovado."); return
         
         for task in task_list:
-            result, _ = self.worker.execute_task(
+            # Use router to determine best worker for this task
+            context = json.dumps(self.executed_tasks_results) if self.executed_tasks_results else ""
+            agent_type, reasoning = self.router.route_task(task, context)
+            
+            # Get the appropriate worker
+            worker = self.worker_map.get(agent_type, self.text_worker)
+            
+            print_agent_message("TaskManager", f"Executando '{task}' com {agent_type}")
+            
+            result, _ = worker.execute_task(
                 task, self.executed_tasks_results, 
                 self.uploaded_files_info, self.goal
             )
@@ -327,7 +610,7 @@ class TaskManager:
 
 # --- Função Principal ---
 if __name__ == "__main__":
-    SCRIPT_VERSION = "v11.25 (Automatic Tool Calling)"
+    SCRIPT_VERSION = "v12.0 (Gemini 2.5 Preview + RouterAgent)"
     log_message(f"--- Início ({SCRIPT_VERSION}) ---", "Sistema")
     print(f"--- Sistema Multiagente Gemini ({SCRIPT_VERSION}) ---")
     
