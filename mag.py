@@ -115,6 +115,55 @@ def generate_image(image_prompt_in_english: str, base_image_path: Optional[str] 
         log_message(f"Erro em generate_image: {e}\\n{traceback.format_exc()}", "Tool:generate_image")
         return {"status": "error", "message": f"Erro ao gerar imagem: {e}"}
 
+def generate_video(video_prompt_in_english: str, duration_seconds: int = 5) -> dict:
+    """Gera um vídeo a partir de um prompt em inglês (Veo3 - quando disponível)."""
+    try:
+        log_message(f"Tentando gerar vídeo: '{video_prompt_in_english[:100]}...'", "Tool:generate_video")
+        
+        # NOTE: This is a placeholder for when Veo3 becomes available in the API
+        # For now, we'll document the request and return a planning response
+        
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"video_plan_{sanitize_filename(video_prompt_in_english[:20])}_{ts}.txt"
+        full_path = os.path.join(OUTPUT_DIRECTORY, filename)
+        
+        plan_content = f"""PLANO DE VÍDEO PARA IMPLEMENTAÇÃO FUTURA (Veo3)
+=================================================
+
+Prompt: {video_prompt_in_english}
+Duração solicitada: {duration_seconds} segundos
+Timestamp: {datetime.datetime.now().isoformat()}
+
+STATUS: Aguardando disponibilidade da API Veo3 do Google
+
+ESPECIFICAÇÕES TÉCNICAS PLANEJADAS:
+- Modelo: Veo3 (quando disponível)
+- Resolução: 1080p
+- Duração: {duration_seconds}s
+- Formato: MP4
+
+PRÓXIMOS PASSOS:
+1. Monitorar atualizações da API do Google
+2. Implementar integração com Veo3
+3. Adicionar configurações de qualidade de vídeo
+4. Implementar pós-processamento se necessário
+
+Este arquivo documenta a solicitação para implementação futura.
+"""
+        
+        with open(full_path, "w", encoding="utf-8") as f:
+            f.write(plan_content)
+        
+        log_message(f"Plano de vídeo documentado: '{filename}'.", "Tool:generate_video")
+        return {
+            "status": "planned", 
+            "message": f"Vídeo planejado e documentado em '{filename}'. Implementação aguarda API Veo3."
+        }
+        
+    except Exception as e:
+        log_message(f"Erro em generate_video: {e}\\n{traceback.format_exc()}", "Tool:generate_video")
+        return {"status": "error", "message": f"Erro ao planejar vídeo: {e}"}
+
 
 # Define tools using the new API format
 save_file_tool = genai.types.FunctionDeclaration(
@@ -155,8 +204,28 @@ generate_image_tool = genai.types.FunctionDeclaration(
     }
 )
 
-AVAILABLE_TOOLS = {"save_file": save_file, "generate_image": generate_image}
-AVAILABLE_TOOL_DECLARATIONS = [save_file_tool, generate_image_tool]
+generate_video_tool = genai.types.FunctionDeclaration(
+    name="generate_video",
+    description="Gera um vídeo a partir de um prompt em inglês (Veo3 - planejamento para implementação futura)",
+    parameters={
+        "type": "object",
+        "properties": {
+            "video_prompt_in_english": {
+                "type": "string",
+                "description": "Prompt em inglês para gerar o vídeo"
+            },
+            "duration_seconds": {
+                "type": "integer",
+                "description": "Duração do vídeo em segundos (padrão: 5)",
+                "default": 5
+            }
+        },
+        "required": ["video_prompt_in_english"]
+    }
+)
+
+AVAILABLE_TOOLS = {"save_file": save_file, "generate_image": generate_image, "generate_video": generate_video}
+AVAILABLE_TOOL_DECLARATIONS = [save_file_tool, generate_image_tool, generate_video_tool]
 
 # --- Funções de Comunicação e Arquivos ---
 def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
@@ -280,10 +349,35 @@ def call_gemini_api_with_retry(prompt_parts, agent_name="Sistema", gen_config_di
     return None
 
 def extract_and_print_thoughts(response):
-    if response and response.candidates and hasattr(response.candidates[0].content, 'parts'):
-        for part in response.candidates[0].content.parts:
-            if hasattr(part, 'thought') and part.thought and part.text:
-                print_thought_message(part.text)
+    """Extrai e exibe pensamentos/raciocínio do modelo Gemini."""
+    if not response or not response.candidates:
+        return
+        
+    for candidate in response.candidates:
+        if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
+            for part in candidate.content.parts:
+                # Look for thinking/thought content in different possible formats
+                if hasattr(part, 'thought') and part.thought:
+                    if hasattr(part.thought, 'content'):
+                        print_thought_message(part.thought.content)
+                    elif hasattr(part, 'text') and part.text:
+                        print_thought_message(part.text)
+                elif hasattr(part, 'text') and part.text and 'pensamento:' in part.text.lower():
+                    # Extract thinking content from text
+                    lines = part.text.split('\n')
+                    thought_lines = []
+                    in_thought = False
+                    for line in lines:
+                        if 'pensamento:' in line.lower() or 'thinking:' in line.lower():
+                            in_thought = True
+                            thought_lines.append(line)
+                        elif in_thought and (line.strip() == '' or line.startswith('---')):
+                            break
+                        elif in_thought:
+                            thought_lines.append(line)
+                    
+                    if thought_lines:
+                        print_thought_message('\n'.join(thought_lines))
 
 # --- Classes dos Agentes ---
 
@@ -294,9 +388,10 @@ class RouterAgent:
         self.routing_instruction = (
             "Você é um Router Agent especialista. Analise a tarefa fornecida e determine qual tipo de agente "
             "é mais adequado para executá-la. Responda com um JSON contendo 'agent_type' e 'reasoning'. "
-            "Tipos disponíveis: 'text_worker' (tarefas de texto/código), 'image_worker' (geração de imagens), "
-            "'video_worker' (geração de vídeos), 'analysis_worker' (análise e pensamento complexo). "
-            "Exemplo: {'agent_type': 'text_worker', 'reasoning': 'Tarefa envolve processamento de texto'}"
+            "Tipos disponíveis: 'text_worker' (tarefas de texto/código simples), 'image_worker' (geração de imagens), "
+            "'video_worker' (geração de vídeos), 'analysis_worker' (análise de dados), "
+            "'thinking_worker' (raciocínio complexo, problemas difíceis, planejamento estratégico). "
+            "Exemplo: {'agent_type': 'thinking_worker', 'reasoning': 'Tarefa requer raciocínio complexo'}"
         )
         log_message("RouterAgent criado.", "RouterAgent")
     
@@ -523,6 +618,63 @@ class VideoWorker(Worker):
         
         return {"text_content": response.text.strip() if response.text else "Vídeo processado (planejado)."}, []
 
+class ThinkingWorker(Worker):
+    """Agente especializado em pensamento complexo e raciocínio estruturado."""
+    
+    def __init__(self, task_manager):
+        super().__init__(task_manager)
+        log_message("ThinkingWorker (v12.0 - Chain of Thought) criado.", "ThinkingWorker")
+    
+    def execute_task(self, task_description, previous_results, files_info, original_goal):
+        agent_name = "ThinkingWorker"
+        print_agent_message(agent_name, f"Executando (pensamento): '{task_description}'")
+
+        conversation_history = []
+        if self.task_manager.uploaded_file_objects:
+             conversation_history.extend(self.task_manager.uploaded_file_objects)
+        
+        conversation_history.append(
+            f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\n"
+            f"Objetivo Geral: {original_goal}\n\n"
+            f"TAREFA DE PENSAMENTO COMPLEXO: {task_description}\n\n"
+            f"Instruções especiais:\n"
+            f"1. Use raciocínio passo-a-passo (chain-of-thought)\n"
+            f"2. Comece explicando seu PENSAMENTO: antes de dar a resposta\n"
+            f"3. Considere múltiplas perspectivas e alternativas\n"
+            f"4. Identifique possíveis problemas ou limitações\n"
+            f"5. Forneça justificativas para suas conclusões\n"
+            f"6. Se necessário, use ferramentas para salvar análises detalhadas\n\n"
+            f"Formato preferido:\n"
+            f"PENSAMENTO: [seu raciocínio detalhado aqui]\n"
+            f"RESPOSTA: [sua conclusão/solução aqui]"
+        )
+        
+        gen_config = {
+            "tools": AVAILABLE_TOOL_DECLARATIONS,
+            "temperature": 0.4,  # Equilibrio entre criatividade e precisão
+            "max_output_tokens": 2048  # Permite respostas mais elaboradas
+        }
+
+        response = call_gemini_api_with_retry(conversation_history, agent_name, gen_config_dict=gen_config)
+
+        if not response: return {"text_content": "Falha na API."}, []
+
+        extract_and_print_thoughts(response)
+        
+        # Handle function calls if any
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    function_name = part.function_call.name
+                    function_args = dict(part.function_call.args)
+                    
+                    if function_name in AVAILABLE_TOOLS:
+                        log_message(f"Executando função: {function_name} com args: {function_args}", agent_name)
+                        result = AVAILABLE_TOOLS[function_name](**function_args)
+                        log_message(f"Resultado da função {function_name}: {result}", agent_name)
+        
+        return {"text_content": response.text.strip() if response.text else "Pensamento estruturado concluído."}, []
+
 class TaskManager:
     def __init__(self, initial_goal, uploaded_files, files_meta):
         self.goal = initial_goal
@@ -536,13 +688,15 @@ class TaskManager:
         self.image_worker = ImageWorker(self)
         self.analysis_worker = AnalysisWorker(self)
         self.video_worker = VideoWorker(self)
+        self.thinking_worker = ThinkingWorker(self)
         
         # Map agent types to worker instances
         self.worker_map = {
             "text_worker": self.text_worker,
             "image_worker": self.image_worker,
             "analysis_worker": self.analysis_worker,
-            "video_worker": self.video_worker
+            "video_worker": self.video_worker,
+            "thinking_worker": self.thinking_worker
         }
         
         self.system_instruction = (

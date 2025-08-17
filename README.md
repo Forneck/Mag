@@ -1,17 +1,22 @@
-# MAG: Sistema Multiagente Gemini (v9.4)
+# MAG: Sistema Multiagente Gemini (v12.0 - Gemini 2.5 Preview)
 
 ## Descrição
 
-MAG (Multi-Agent Gemini) é um sistema baseado em Python que utiliza os Modelos de Linguagem Grandes (LLMs) Gemini do Google para automatizar tarefas complexas através de uma arquitetura multiagente. Ele emprega um Agente Gerenciador de Tarefas (**TaskManager**) para decompor objetivos de alto nível em subtarefas gerenciáveis. Essas tarefas são executadas por Agentes Trabalhadores (**Worker**) especializados e, em seguida, avaliadas por um Agente Validador (**Validator**) que gerencia a qualidade e o ciclo de feedback com o usuário antes de salvar os artefatos finais.
+MAG (Multi-Agent Gemini) é um sistema baseado em Python que utiliza os Modelos de Linguagem Grandes (LLMs) Gemini 2.5 Preview do Google para automatizar tarefas complexas através de uma arquitetura multiagente inteligente. O sistema agora inclui um **RouterAgent** que automaticamente seleciona o agente especializado mais adequado para cada tarefa, oferecendo capacidades aprimoradas de raciocínio, geração de imagens e preparação para geração de vídeos com Veo3.
 
 ## Funcionalidades
 
-* **Decomposição de Tarefas**: O **TaskManager** divide metas complexas em uma lista sequencial de subtarefas usando o Gemini.
+* **Roteamento Inteligente**: Novo **RouterAgent** que analisa cada tarefa e automaticamente seleciona o agente especializado mais adequado.
+* **Decomposição de Tarefas**: O **TaskManager** divide metas complexas em uma lista sequencial de subtarefas usando o Gemini 2.5 Preview.
 * **Agentes Especializados**:
     * **Worker**: Executa subtarefas gerais baseadas em texto e código.
-    * **ImageWorker**: Dedicado a gerar imagens, salvando-as em um diretório temporário para avaliação.
-    * **Validator**: Agente de qualidade que avalia os artefatos gerados (texto, código e imagens), gerencia o ciclo de feedback com o usuário e consolida a saída final.
-* **Gerenciamento Dinâmico de Tarefas**: O Worker pode sugerir novas tarefas durante a execução, que o TaskManager valida e integra ao fluxo de trabalho.
+    * **ImageWorker**: Dedicado a gerar e processar imagens usando Gemini 2.0 Flash.
+    * **AnalysisWorker**: Especializado em análise de dados e processamento complexo.
+    * **ThinkingWorker**: Focado em raciocínio estruturado, chain-of-thought e resolução de problemas complexos.
+    * **VideoWorker**: Preparado para geração de vídeos com Veo3 (quando disponível na API).
+* **Capacidades Aprimoradas de Pensamento**: Suporte melhorado para chain-of-thought reasoning e análise estruturada.
+* **Ferramenta de Geração de Imagens**: Integração completa com modelos de geração de imagens do Gemini.
+* **Preparação para Veo3**: Framework pronto para integração com geração de vídeos quando a API estiver disponível.
 * **Upload de Arquivos e Contexto**: Suporta o upload de arquivos locais (com wildcards, ex: `*.txt`) para fornecer contexto adicional aos modelos Gemini.
 * **Gerenciamento de Cache**: Permite ao usuário visualizar e, opcionalmente, limpar o cache de uploads local e os arquivos na API Gemini antes de iniciar uma nova sessão.
 * **Ciclo de Validação e Feedback Robusto**:
@@ -22,54 +27,57 @@ MAG (Multi-Agent Gemini) é um sistema baseado em Python que utiliza os Modelos 
 
 ## Arquitetura
 
-O sistema é construído sobre um padrão Gerenciador/Trabalhador/Validador:
+O sistema é construído sobre um padrão Gerenciador/Router/Trabalhadores Especializados:
 
-* **TaskManager**: Atua como o orquestrador central. Ele interpreta o objetivo, o divide em um plano, delega as subtarefas, gerencia o fluxo de informações e orquestra o ciclo de validação e feedback.
+* **TaskManager**: Atua como o orquestrador central. Ele interpreta o objetivo, o divide em um plano, e delega as subtarefas aos agentes apropriados.
+* **RouterAgent**: Agente inteligente que analisa cada tarefa e determina qual agente especializado é mais adequado para executá-la.
 * **Worker**: Agente de propósito geral responsável por executar subtarefas baseadas em texto e código.
-* **ImageWorker**: Agente especializado focado em gerar imagens com base em prompts e salvar os resultados temporariamente.
-* **Validator**: Agente de "Quality Assurance". Ele avalia os conceitos de imagem gerados e realiza a validação final de todos os artefatos, interagindo com o usuário para aprovação ou iteração.
+* **ImageWorker**: Agente especializado focado em gerar e processar imagens.
+* **AnalysisWorker**: Agente especializado em análise de dados e processamento analítico.
+* **ThinkingWorker**: Agente focado em raciocínio complexo, chain-of-thought e resolução de problemas estruturados.
+* **VideoWorker**: Agente preparado para geração de vídeos (Veo3 quando disponível).
 
 ## Componentes/Classes Chave
 
+* **RouterAgent**:
+    * `route_task()`: Analisa tarefas e seleciona o agente especializado mais adequado.
 * **TaskManager**:
-    * `run_workflow()`: Gerencia o fluxo de execução geral, incluindo o novo ciclo de validação e feedback.
-    * `decompose_task()`: Decompõe a meta principal.
-    * `confirm_new_tasks_with_llm()`: Valida novas tarefas sugeridas.
-* **Worker**:
-    * `execute_sub_task()`: Executa uma subtarefa e pode sugerir novas.
-* **ImageWorker**:
-    * `generate_image()`: Gera uma imagem e a salva em um diretório temporário, retornando o caminho do arquivo.
-* **Validator**:
-    * `evaluate_and_select_image_concepts()`: Seleciona os prompts de imagem mais promissores para aprovação.
-    * `validate_and_save_final_output()`: Realiza a validação final, gera o relatório e, após a aprovação, move os artefatos para a pasta de saída final.
-* **Funções de Apoio**:
-    * `clear_upload_cache()`: Permite a limpeza do cache local e da API.
-    * `get_user_feedback_or_approval()`: Garante uma captura de entrada robusta do usuário para o ciclo de feedback.
+    * `run_workflow()`: Gerencia o fluxo de execução geral, incluindo roteamento inteligente de tarefas.
+    * `decompose_goal()`: Decompõe a meta principal usando Gemini 2.5 Preview.
+* **Worker**: Agente geral para tarefas de texto e código.
+* **ImageWorker**: Agente especializado para geração e processamento de imagens.
+* **AnalysisWorker**: Agente especializado para análise de dados.
+* **ThinkingWorker**: Agente especializado em raciocínio complexo e chain-of-thought.
+* **VideoWorker**: Agente preparado para geração de vídeos (Veo3).
+* **Funções de Ferramentas**:
+    * `save_file()`: Salva conteúdo em arquivos.
+    * `generate_image()`: Gera imagens usando Gemini 2.0 Flash.
+    * `generate_video()`: Planeja geração de vídeos (Veo3 quando disponível).
 
 ## Como Funciona (Fluxo de Trabalho)
 
-1.  **Limpeza de Cache (Opcional)**: O usuário decide se quer limpar os caches locais e da API.
-2.  **Entrada do Usuário**: O usuário fornece uma meta principal e, opcionalmente, faz upload de arquivos.
-3.  **Decomposição e Aprovação**: O TaskManager cria um plano de tarefas, que o usuário aprova.
-4.  **Loop de Execução de Tarefas**:
-    * O TaskManager itera pela lista, delegando tarefas aos Workers apropriados.
-    * O `ImageWorker` gera imagens e as salva em `gemini_temp_artifacts/`.
-    * Resultados e artefatos são coletados.
-5.  **Ciclo de Validação e Feedback**:
-    * Ao final do ciclo de tarefas, o **Validator** avalia todos os artefatos gerados.
-    * Se a validação falhar, o usuário é apresentado com o menu: `[A]provar`, `[F]eedback`, `[S]air`.
-    * **Feedback**: Se o usuário fornecer feedback, uma nova tarefa de correção é adicionada à lista, e o loop de execução recomeça.
-    * **Aprovar/Sair**: Se o usuário aprovar ou se a validação inicial for bem-sucedida, o Validator move os artefatos aprovados do diretório temporário para a pasta de saída final (`gemini_final_outputs/`) e o processo é concluído.
+1.  **Gerenciamento de Arquivos**: O usuário pode gerenciar arquivos existentes na API e fazer upload de novos arquivos.
+2.  **Entrada do Usuário**: O usuário fornece uma meta principal.
+3.  **Decomposição e Aprovação**: O TaskManager cria um plano de tarefas usando Gemini 2.5 Preview, que o usuário aprova.
+4.  **Loop de Execução com Roteamento Inteligente**:
+    * O TaskManager itera pela lista de tarefas.
+    * Para cada tarefa, o **RouterAgent** analisa o conteúdo e seleciona automaticamente o agente especializado mais adequado.
+    * O agente selecionado (Worker, ImageWorker, AnalysisWorker, ThinkingWorker, ou VideoWorker) executa a tarefa.
+    * Resultados são coletados e contextualizados para as próximas tarefas.
+5.  **Processamento Especializado**:
+    * **ImageWorker** gera imagens usando Gemini 2.0 Flash.
+    * **ThinkingWorker** aplica raciocínio estruturado e chain-of-thought.
+    * **AnalysisWorker** processa dados analíticos.
+    * **VideoWorker** planeja geração de vídeos para implementação futura com Veo3.
 
 ## Configuração/Pré-requisitos
 
-* Python 3.x
-* Chave da API Google Gemini
+* Python 3.8+
+* Chave da API Google Gemini 2.5 Preview
 * Pacotes Python necessários:
     ```bash
-    pip install google-generativeai
+    pip install google-generativeai pillow
     ```
-    *(O script usa bibliotecas padrão como `os`, `json`, `shutil`, etc.)*
 
 ## Variáveis de Ambiente
 
@@ -80,19 +88,27 @@ O sistema é construído sobre um padrão Gerenciador/Trabalhador/Validador:
 
 ## Uso
 
-1.  Certifique-se de que você tem o Python instalado e a variável de ambiente `GEMINI_API_KEY` configurada.
-2.  Salve o script como `mag.py`.
-3.  Execute o script a partir do seu terminal: `python mag.py`
-4.  O script irá guiá-lo através das etapas: limpeza de cache (opcional), definição da meta, upload de arquivos e aprovação do plano.
+1.  Certifique-se de que você tem o Python 3.8+ instalado e a variável de ambiente `GEMINI_API_KEY` configurada.
+2.  Execute o script: `python mag.py`
+3.  O sistema irá guiá-lo através das etapas: gerenciamento de arquivos, definição da meta e aprovação do plano.
+4.  O RouterAgent automaticamente selecionará os melhores agentes especializados para cada tarefa.
 
 ## Configuração
 
-Vários parâmetros podem ser configurados diretamente no início do script `mag.py`:
+Vários parâmetros podem ser configurados no início do script `mag.py`:
 
-* **Diretórios**: `LOG_DIRECTORY`, `OUTPUT_DIRECTORY`, `UPLOADED_FILES_CACHE_DIR`, `TEMP_ARTIFACTS_DIR`.
-* **Retentativas**: `MAX_API_RETRIES`, `MAX_AUTOMATIC_VALIDATION_RETRIES`, `MAX_MANUAL_VALIDATION_RETRIES`.
-* **Modelos**: `GEMINI_TEXT_MODEL_NAME`, `GEMINI_IMAGE_GENERATION_MODEL_NAME`.
-* **Configurações de Geração**: `generation_config_text`, `generation_config_image_sdk`.
+* **Diretórios**: `LOG_DIRECTORY`, `OUTPUT_DIRECTORY`.
+* **Retentativas**: `MAX_API_RETRIES`.
+* **Modelos**: `GEMINI_TEXT_MODEL_NAME` (Gemini 2.5 Preview), `GEMINI_IMAGE_MODEL_NAME` (Gemini 2.0 Flash).
+
+## Novidades da Versão 12.0 (Gemini 2.5 Preview)
+
+* **Compatibilidade com Gemini 2.5 Preview**: Atualização completa da API.
+* **RouterAgent**: Sistema inteligente de roteamento automático de tarefas.
+* **Agentes Especializados**: ImageWorker, AnalysisWorker, ThinkingWorker, VideoWorker.
+* **Capacidades de Pensamento Aprimoradas**: Melhor suporte para chain-of-thought reasoning.
+* **Preparação para Veo3**: Framework pronto para geração de vídeos quando disponível.
+* **Ferramenta de Vídeo**: Planejamento e documentação para futura integração com Veo3.
 
 ## Estrutura de Arquivos (Saídas)
 
