@@ -548,6 +548,133 @@ def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {me
 def print_user_message(message): print(f"\n👤 [Usuário]: {message}"); log_message(message, "Usuário")
 def print_thought_message(message): print(f"\n🧠 [Pensamento]:\\n{message}"); log_message(f"PENSAMENTO:\n{message}", "Agente")
 
+def get_mime_type_from_extension(file_path: str) -> str:
+    """Determina o tipo MIME baseado na extensão do arquivo."""
+    if not file_path:
+        return 'text/plain'
+        
+    filename = os.path.basename(file_path.lower())
+    _, ext = os.path.splitext(filename)
+    
+    # Special files without extensions (case-insensitive check)
+    special_files = {
+        'makefile': 'text/x-makefile',
+        'dockerfile': 'text/x-dockerfile',
+        'readme': 'text/plain',
+        'license': 'text/plain',
+        'changelog': 'text/plain',
+        'authors': 'text/plain',
+        'contributors': 'text/plain',
+        'copying': 'text/plain',
+        'install': 'text/plain',
+        'news': 'text/plain',
+        'todo': 'text/plain',
+        'version': 'text/plain',
+        'manifest': 'text/plain',
+        'gemfile': 'text/x-ruby',
+        'rakefile': 'text/x-ruby',
+        'vagrantfile': 'text/x-ruby',
+    }
+    
+    # Check for special files first
+    if filename in special_files:
+        mime_type = special_files[filename]
+        log_message(f"Arquivo '{file_path}' -> MIME type: {mime_type} (arquivo especial)", "Sistema")
+        return mime_type
+    
+    # Mapeamento de extensões para tipos MIME
+    mime_mapping = {
+        # C/C++ files
+        '.c': 'text/x-c',
+        '.cpp': 'text/x-c',
+        '.cc': 'text/x-c', 
+        '.cxx': 'text/x-c',
+        '.c++': 'text/x-c',
+        '.h': 'text/x-c',
+        '.hpp': 'text/x-c',
+        '.hh': 'text/x-c',
+        '.hxx': 'text/x-c',
+        '.h++': 'text/x-c',
+        
+        # Other programming languages
+        '.py': 'text/x-python',
+        '.js': 'text/javascript',
+        '.java': 'text/x-java-source',
+        '.php': 'text/x-php',
+        '.rb': 'text/x-ruby',
+        '.go': 'text/x-go',
+        '.rs': 'text/x-rust',
+        '.swift': 'text/x-swift',
+        '.kt': 'text/x-kotlin',
+        '.cs': 'text/x-csharp',
+        '.vb': 'text/x-vb',
+        '.pl': 'text/x-perl',
+        '.sh': 'text/x-shellscript',
+        '.bash': 'text/x-shellscript',
+        '.zsh': 'text/x-shellscript',
+        '.fish': 'text/x-shellscript',
+        '.ps1': 'text/x-powershell',
+        '.bat': 'text/x-msdos-batch',
+        '.cmd': 'text/x-msdos-batch',
+        
+        # Web technologies
+        '.html': 'text/html',
+        '.htm': 'text/html',
+        '.css': 'text/css',
+        '.scss': 'text/x-scss',
+        '.sass': 'text/x-sass',
+        '.less': 'text/x-less',
+        '.xml': 'application/xml',
+        '.xhtml': 'application/xhtml+xml',
+        '.svg': 'image/svg+xml',
+        
+        # Data formats
+        '.json': 'application/json',
+        '.yaml': 'text/x-yaml',
+        '.yml': 'text/x-yaml',
+        '.toml': 'text/x-toml',
+        '.ini': 'text/x-ini',
+        '.cfg': 'text/x-ini',
+        '.conf': 'text/x-ini',
+        '.properties': 'text/x-java-properties',
+        
+        # Documentation
+        '.txt': 'text/plain',
+        '.md': 'text/markdown',
+        '.markdown': 'text/markdown',
+        '.rst': 'text/x-rst',
+        '.tex': 'text/x-tex',
+        '.rtf': 'text/rtf',
+        
+        # Logs and data
+        '.log': 'text/plain',
+        '.csv': 'text/csv',
+        '.tsv': 'text/tab-separated-values',
+        
+        # Scripts and config
+        '.dockerfile': 'text/x-dockerfile',
+        '.gitignore': 'text/plain',
+        '.gitattributes': 'text/plain',
+        '.editorconfig': 'text/plain',
+        '.env': 'text/plain',
+        
+        # SQL
+        '.sql': 'text/x-sql',
+        
+        # Assembly
+        '.asm': 'text/x-asm',
+        '.s': 'text/x-asm',
+        
+        # Makefiles
+        '.makefile': 'text/x-makefile',
+        '.make': 'text/x-makefile',
+        '.mk': 'text/x-makefile',
+    }
+    
+    mime_type = mime_mapping.get(ext, 'text/plain')
+    log_message(f"Arquivo '{file_path}' -> MIME type: {mime_type}", "Sistema")
+    return mime_type
+
 def get_uploaded_files_info_from_user():
     uploaded_file_objects, uploaded_files_metadata = [], []
     try:
@@ -606,7 +733,8 @@ def get_uploaded_files_info_from_user():
                 try:
                     if os.path.isfile(fp): # Adicional checagem caso o glob retorne algo que não é um arquivo direto
                         print_agent_message("Sistema", f"Enviando '{dn}'...")
-                        file_obj = genai.upload_file(path=fp)
+                        mime_type = get_mime_type_from_extension(fp)
+                        file_obj = genai.upload_file(path=fp, mime_type=mime_type)
                         uploaded_file_objects.append(file_obj)
                         uploaded_files_metadata.append({"file_id": file_obj.name, "display_name": dn})
                         print_agent_message("Sistema", f"✅ '{dn}' enviado."); time.sleep(0.5) # Pequena pausa para evitar sobrecarga da API
