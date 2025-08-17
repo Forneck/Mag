@@ -174,7 +174,7 @@ def google_search(query: str, num_results: int = 5) -> dict:
         log_message(f"Buscando no Google: '{query}' (máximo {num_results} resultados)", "Tool:google_search")
         
         search_results = []
-        for result in search(query, stop=num_results, pause=2):
+        for result in search(query, num_results=num_results, sleep_interval=2):
             search_results.append(result)
             if len(search_results) >= num_results:
                 break
