@@ -11,6 +11,10 @@ import glob
 from typing import List, Optional, Dict, Any
 from PIL import Image
 from io import BytesIO
+import requests
+from bs4 import BeautifulSoup
+from googlesearch import search
+import urllib.parse
 
 # --- Configuração dos Diretórios e Arquivos ---
 BASE_DIRECTORY = os.path.dirname(os.path.abspath(__file__))
@@ -164,6 +168,234 @@ Este arquivo documenta a solicitação para implementação futura.
         log_message(f"Erro em generate_video: {e}\\n{traceback.format_exc()}", "Tool:generate_video")
         return {"status": "error", "message": f"Erro ao planejar vídeo: {e}"}
 
+def google_search(query: str, num_results: int = 5) -> dict:
+    """Realiza uma busca no Google e retorna os resultados com títulos e links."""
+    try:
+        log_message(f"Buscando no Google: '{query}' (máximo {num_results} resultados)", "Tool:google_search")
+        
+        search_results = []
+        for result in search(query, stop=num_results, pause=2):
+            search_results.append(result)
+            if len(search_results) >= num_results:
+                break
+            
+        if not search_results:
+            return {"status": "success", "message": "Nenhum resultado encontrado.", "results": []}
+        
+        # Try to get titles by fetching the pages
+        detailed_results = []
+        for i, url in enumerate(search_results):
+            try:
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                response = requests.get(url, headers=headers, timeout=10)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.content, 'html.parser')
+                    title = soup.find('title')
+                    title_text = title.text.strip() if title else f"Resultado {i+1}"
+                    detailed_results.append({
+                        "title": title_text,
+                        "url": url,
+                        "snippet": f"Link {i+1} - {url}"
+                    })
+                else:
+                    detailed_results.append({
+                        "title": f"Resultado {i+1}",
+                        "url": url,
+                        "snippet": f"Status: {response.status_code}"
+                    })
+            except Exception as e:
+                detailed_results.append({
+                    "title": f"Resultado {i+1}",
+                    "url": url,
+                    "snippet": f"Erro ao acessar: {str(e)}"
+                })
+        
+        result_text = f"Encontrados {len(detailed_results)} resultados para '{query}':\\n"
+        for result in detailed_results:
+            result_text += f"\\n• {result['title']}\\n  URL: {result['url']}\\n  {result['snippet']}\\n"
+        
+        log_message(f"Busca concluída: {len(detailed_results)} resultados", "Tool:google_search")
+        
+        return {
+            "status": "success", 
+            "message": result_text,
+            "results": detailed_results,
+            "count": len(detailed_results)
+        }
+        
+    except Exception as e:
+        log_message(f"Erro em google_search: {e}\\n{traceback.format_exc()}", "Tool:google_search")
+        return {"status": "error", "message": f"Erro ao buscar no Google: {e}"}
+
+def fetch_webpage_content(url: str, extract_text_only: bool = True) -> dict:
+    """Busca o conteúdo de uma página web e extrai texto ou HTML."""
+    try:
+        log_message(f"Buscando conteúdo da página: {url}", "Tool:fetch_webpage_content")
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
+        
+        if extract_text_only:
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Remove script and style elements
+            for script in soup(["script", "style", "nav", "footer", "aside"]):
+                script.decompose()
+            
+            # Get text content
+            text_content = soup.get_text()
+            
+            # Clean up text
+            lines = (line.strip() for line in text_content.splitlines())
+            chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+            text_content = '\\n'.join(chunk for chunk in chunks if chunk)
+            
+            # Limit content size
+            if len(text_content) > 8000:
+                text_content = text_content[:8000] + "\\n\\n[CONTEÚDO TRUNCADO...]"
+            
+            # Get page title
+            title = soup.find('title')
+            page_title = title.text.strip() if title else "Título não encontrado"
+            
+            result_message = f"Conteúdo extraído de: {url}\\n\\nTítulo: {page_title}\\n\\nConteúdo:\\n{text_content}"
+            
+            log_message(f"Texto extraído com sucesso de {url} - {len(text_content)} caracteres", "Tool:fetch_webpage_content")
+            
+            return {
+                "status": "success",
+                "message": result_message,
+                "title": page_title,
+                "content": text_content,
+                "url": url
+            }
+        else:
+            # Return raw HTML (limited)
+            html_content = response.text
+            if len(html_content) > 10000:
+                html_content = html_content[:10000] + "\\n\\n[HTML TRUNCADO...]"
+            
+            return {
+                "status": "success",
+                "message": f"HTML bruto extraído de: {url}\\n\\n{html_content}",
+                "content": html_content,
+                "url": url
+            }
+            
+    except requests.exceptions.RequestException as e:
+        log_message(f"Erro de requisição em fetch_webpage_content: {e}", "Tool:fetch_webpage_content")
+        return {"status": "error", "message": f"Erro ao acessar a página: {e}"}
+    except Exception as e:
+        log_message(f"Erro em fetch_webpage_content: {e}\\n{traceback.format_exc()}", "Tool:fetch_webpage_content")
+        return {"status": "error", "message": f"Erro ao processar página: {e}"}
+
+def browser_automation(action: str, url: str = "", element_selector: str = "", text_input: str = "", wait_seconds: int = 3) -> dict:
+    """Automação básica de browser usando requests e BeautifulSoup (versão simplificada sem Playwright)."""
+    try:
+        log_message(f"Automação browser: ação '{action}' em {url}", "Tool:browser_automation")
+        
+        if action == "navigate":
+            if not url:
+                return {"status": "error", "message": "URL é obrigatória para navegação"}
+            
+            result = fetch_webpage_content(url, extract_text_only=True)
+            if result["status"] == "success":
+                return {
+                    "status": "success",
+                    "message": f"Navegação para {url} concluída.\\n\\n{result['message']}",
+                    "content": result.get("content", ""),
+                    "title": result.get("title", "")
+                }
+            else:
+                return result
+                
+        elif action == "search_content":
+            if not url or not element_selector:
+                return {"status": "error", "message": "URL e texto de busca são obrigatórios"}
+            
+            # Use element_selector as search text
+            search_text = element_selector.lower()
+            result = fetch_webpage_content(url, extract_text_only=True)
+            
+            if result["status"] == "success":
+                content = result.get("content", "").lower()
+                if search_text in content:
+                    # Find context around the search term
+                    index = content.find(search_text)
+                    start = max(0, index - 200)
+                    end = min(len(content), index + 200)
+                    context = result.get("content", "")[start:end]
+                    
+                    return {
+                        "status": "success",
+                        "message": f"Texto '{element_selector}' encontrado em {url}:\\n\\n...{context}...",
+                        "found": True,
+                        "context": context
+                    }
+                else:
+                    return {
+                        "status": "success",
+                        "message": f"Texto '{element_selector}' não encontrado em {url}",
+                        "found": False
+                    }
+            else:
+                return result
+                
+        elif action == "extract_links":
+            if not url:
+                return {"status": "error", "message": "URL é obrigatória para extrair links"}
+            
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            links = []
+            
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                text = link.get_text().strip()
+                
+                # Convert relative URLs to absolute
+                if href.startswith('/'):
+                    href = urllib.parse.urljoin(url, href)
+                elif not href.startswith('http'):
+                    continue
+                    
+                if text and len(text) > 0:
+                    links.append({"text": text, "url": href})
+            
+            # Limit number of links
+            links = links[:20]
+            
+            links_text = f"Links extraídos de {url}:\\n\\n"
+            for i, link in enumerate(links, 1):
+                links_text += f"{i}. {link['text']}\\n   URL: {link['url']}\\n\\n"
+            
+            return {
+                "status": "success",
+                "message": links_text,
+                "links": links,
+                "count": len(links)
+            }
+            
+        else:
+            return {
+                "status": "error", 
+                "message": f"Ação '{action}' não suportada. Use: navigate, search_content, extract_links"
+            }
+            
+    except requests.exceptions.RequestException as e:
+        log_message(f"Erro de requisição em browser_automation: {e}", "Tool:browser_automation")
+        return {"status": "error", "message": f"Erro de rede: {e}"}
+    except Exception as e:
+        log_message(f"Erro em browser_automation: {e}\\n{traceback.format_exc()}", "Tool:browser_automation")
+        return {"status": "error", "message": f"Erro na automação: {e}"}
+
 
 # Define tools using the new API format
 save_file_tool = genai.types.FunctionDeclaration(
@@ -224,8 +456,96 @@ generate_video_tool = genai.types.FunctionDeclaration(
     }
 )
 
-AVAILABLE_TOOLS = {"save_file": save_file, "generate_image": generate_image, "generate_video": generate_video}
-AVAILABLE_TOOL_DECLARATIONS = [save_file_tool, generate_image_tool, generate_video_tool]
+google_search_tool = genai.types.FunctionDeclaration(
+    name="google_search",
+    description="Realiza uma busca no Google e retorna os resultados com títulos e links",
+    parameters={
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Termo de busca para o Google"
+            },
+            "num_results": {
+                "type": "integer",
+                "description": "Número máximo de resultados a retornar (padrão: 5)",
+                "default": 5
+            }
+        },
+        "required": ["query"]
+    }
+)
+
+fetch_webpage_content_tool = genai.types.FunctionDeclaration(
+    name="fetch_webpage_content",
+    description="Busca o conteúdo de uma página web e extrai texto limpo ou HTML bruto",
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "URL da página web a ser acessada"
+            },
+            "extract_text_only": {
+                "type": "boolean",
+                "description": "Se true, extrai apenas texto limpo. Se false, retorna HTML bruto (padrão: true)",
+                "default": True
+            }
+        },
+        "required": ["url"]
+    }
+)
+
+browser_automation_tool = genai.types.FunctionDeclaration(
+    name="browser_automation",
+    description="Automação básica de browser para navegar, buscar conteúdo e extrair links de páginas web",
+    parameters={
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "description": "Ação a realizar: 'navigate' (navegar para URL), 'search_content' (buscar texto na página), 'extract_links' (extrair todos os links)",
+                "enum": ["navigate", "search_content", "extract_links"]
+            },
+            "url": {
+                "type": "string",
+                "description": "URL da página web (obrigatório para todas as ações)"
+            },
+            "element_selector": {
+                "type": "string",
+                "description": "Texto a buscar na página (usado com action='search_content')"
+            },
+            "text_input": {
+                "type": "string",
+                "description": "Texto para entrada (reservado para futuras funcionalidades)"
+            },
+            "wait_seconds": {
+                "type": "integer",
+                "description": "Segundos para aguardar (padrão: 3)",
+                "default": 3
+            }
+        },
+        "required": ["action", "url"]
+    }
+)
+
+AVAILABLE_TOOLS = {
+    "save_file": save_file, 
+    "generate_image": generate_image, 
+    "generate_video": generate_video,
+    "google_search": google_search,
+    "fetch_webpage_content": fetch_webpage_content,
+    "browser_automation": browser_automation
+}
+
+AVAILABLE_TOOL_DECLARATIONS = [
+    save_file_tool, 
+    generate_image_tool, 
+    generate_video_tool,
+    google_search_tool,
+    fetch_webpage_content_tool,
+    browser_automation_tool
+]
 
 # --- Funções de Comunicação e Arquivos ---
 def print_agent_message(agent_name, message): print(f"\n🤖 [{agent_name}]: {message}"); log_message(message, agent_name)
@@ -390,8 +710,9 @@ class RouterAgent:
             "é mais adequado para executá-la. Responda com um JSON contendo 'agent_type' e 'reasoning'. "
             "Tipos disponíveis: 'text_worker' (tarefas de texto/código simples), 'image_worker' (geração de imagens), "
             "'video_worker' (geração de vídeos), 'analysis_worker' (análise de dados), "
-            "'thinking_worker' (raciocínio complexo, problemas difíceis, planejamento estratégico). "
-            "Exemplo: {'agent_type': 'thinking_worker', 'reasoning': 'Tarefa requer raciocínio complexo'}"
+            "'thinking_worker' (raciocínio complexo, problemas difíceis, planejamento estratégico), "
+            "'browser_worker' (busca no Google, navegação web, extração de conteúdo de sites, automação de browser). "
+            "Exemplo: {'agent_type': 'browser_worker', 'reasoning': 'Tarefa requer busca web ou navegação'}"
         )
         log_message("RouterAgent criado.", "RouterAgent")
     
@@ -675,6 +996,57 @@ class ThinkingWorker(Worker):
         
         return {"text_content": response.text.strip() if response.text else "Pensamento estruturado concluído."}, []
 
+class BrowserWorker(Worker):
+    """Agente especializado em tarefas relacionadas a navegação web, busca no Google e automação de browser."""
+    
+    def __init__(self, task_manager):
+        super().__init__(task_manager)
+        log_message("BrowserWorker (v12.0 - Google Search + Browser Automation) criado.", "BrowserWorker")
+    
+    def execute_task(self, task_description, previous_results, files_info, original_goal):
+        agent_name = "BrowserWorker"
+        print_agent_message(agent_name, f"Executando (web/browser): '{task_description}'")
+
+        conversation_history = []
+        if self.task_manager.uploaded_file_objects:
+             conversation_history.extend(self.task_manager.uploaded_file_objects)
+        
+        conversation_history.append(
+            f"Contexto: {json.dumps(previous_results) if previous_results else 'Nenhum.'}\n"
+            f"Objetivo Geral: {original_goal}\n\n"
+            f"TAREFA DE NAVEGAÇÃO/PESQUISA WEB: {task_description}\n\n"
+            f"Ferramentas disponíveis para você:\n"
+            f"• google_search: Para buscar informações no Google\n"
+            f"• fetch_webpage_content: Para extrair conteúdo de páginas web\n"
+            f"• browser_automation: Para navegar, buscar texto e extrair links\n\n"
+            f"Use essas ferramentas conforme necessário para completar a tarefa web."
+        )
+        
+        gen_config = {
+            "tools": AVAILABLE_TOOL_DECLARATIONS,
+            "temperature": 0.4  # Equilibrio para pesquisa efetiva
+        }
+
+        response = call_gemini_api_with_retry(conversation_history, agent_name, gen_config_dict=gen_config)
+
+        if not response: return {"text_content": "Falha na API."}, []
+
+        extract_and_print_thoughts(response)
+        
+        # Handle function calls if any
+        if response.candidates and response.candidates[0].content.parts:
+            for part in response.candidates[0].content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    function_name = part.function_call.name
+                    function_args = dict(part.function_call.args)
+                    
+                    if function_name in AVAILABLE_TOOLS:
+                        log_message(f"Executando função: {function_name} com args: {function_args}", agent_name)
+                        result = AVAILABLE_TOOLS[function_name](**function_args)
+                        log_message(f"Resultado da função {function_name}: {result}", agent_name)
+        
+        return {"text_content": response.text.strip() if response.text else "Tarefa web concluída."}, []
+
 class TaskManager:
     def __init__(self, initial_goal, uploaded_files, files_meta):
         self.goal = initial_goal
@@ -689,6 +1061,7 @@ class TaskManager:
         self.analysis_worker = AnalysisWorker(self)
         self.video_worker = VideoWorker(self)
         self.thinking_worker = ThinkingWorker(self)
+        self.browser_worker = BrowserWorker(self)
         
         # Map agent types to worker instances
         self.worker_map = {
@@ -696,14 +1069,15 @@ class TaskManager:
             "image_worker": self.image_worker,
             "analysis_worker": self.analysis_worker,
             "video_worker": self.video_worker,
-            "thinking_worker": self.thinking_worker
+            "thinking_worker": self.thinking_worker,
+            "browser_worker": self.browser_worker
         }
         
         self.system_instruction = (
             "Você é um Gerenciador de Tarefas especialista. Decomponha a meta principal em sub-tarefas sequenciais e executáveis. "
             "Sua resposta DEVE ser um objeto JSON bem formado contendo uma única chave 'tasks', que é uma lista de strings. Exemplo: {\\'tasks\\': [\\'Passo 1\\', \\'Passo 2\\']}"
         )
-        log_message("TaskManager (v11.26 - Gemini 2.5 com Router) criado.", "TaskManager")
+        log_message("TaskManager (v12.0 - Gemini 2.5 com Router + Google Search + Browser Tools) criado.", "TaskManager")
         
     def decompose_goal(self):
         agent_name = "Task Manager"

@@ -1,8 +1,8 @@
-# MAG: Sistema Multiagente Gemini (v12.0 - Gemini 2.5 Preview)
+# MAG: Sistema Multiagente Gemini (v12.0 - Gemini 2.5 Preview + Google Search + Browser Tools)
 
 ## Descrição
 
-MAG (Multi-Agent Gemini) é um sistema baseado em Python que utiliza os Modelos de Linguagem Grandes (LLMs) Gemini 2.5 Preview do Google para automatizar tarefas complexas através de uma arquitetura multiagente inteligente. O sistema agora inclui um **RouterAgent** que automaticamente seleciona o agente especializado mais adequado para cada tarefa, oferecendo capacidades aprimoradas de raciocínio, geração de imagens e preparação para geração de vídeos com Veo3.
+MAG (Multi-Agent Gemini) é um sistema baseado em Python que utiliza os Modelos de Linguagem Grandes (LLMs) Gemini 2.5 Preview do Google para automatizar tarefas complexas através de uma arquitetura multiagente inteligente. O sistema agora inclui um **RouterAgent** que automaticamente seleciona o agente especializado mais adequado para cada tarefa, oferecendo capacidades aprimoradas de raciocínio, geração de imagens, navegação web, busca no Google e automação de browser.
 
 ## Funcionalidades
 
@@ -14,6 +14,11 @@ MAG (Multi-Agent Gemini) é um sistema baseado em Python que utiliza os Modelos 
     * **AnalysisWorker**: Especializado em análise de dados e processamento complexo.
     * **ThinkingWorker**: Focado em raciocínio estruturado, chain-of-thought e resolução de problemas complexos.
     * **VideoWorker**: Preparado para geração de vídeos com Veo3 (quando disponível na API).
+    * **BrowserWorker**: 🆕 Especializado em navegação web, busca no Google e automação de browser.
+* **Ferramentas Web Avançadas**: 🆕
+    * **Google Search**: Busca inteligente no Google com extração de títulos e snippets
+    * **Navegação Web**: Extração de conteúdo limpo de páginas web
+    * **Automação de Browser**: Navegação, busca de texto e extração de links
 * **Capacidades Aprimoradas de Pensamento**: Suporte melhorado para chain-of-thought reasoning e análise estruturada.
 * **Ferramenta de Geração de Imagens**: Integração completa com modelos de geração de imagens do Gemini.
 * **Preparação para Veo3**: Framework pronto para integração com geração de vídeos quando a API estiver disponível.
@@ -36,6 +41,7 @@ O sistema é construído sobre um padrão Gerenciador/Router/Trabalhadores Espec
 * **AnalysisWorker**: Agente especializado em análise de dados e processamento analítico.
 * **ThinkingWorker**: Agente focado em raciocínio complexo, chain-of-thought e resolução de problemas estruturados.
 * **VideoWorker**: Agente preparado para geração de vídeos (Veo3 quando disponível).
+* **BrowserWorker**: 🆕 Agente especializado em navegação web, busca no Google e automação de browser.
 
 ## Componentes/Classes Chave
 
@@ -49,10 +55,14 @@ O sistema é construído sobre um padrão Gerenciador/Router/Trabalhadores Espec
 * **AnalysisWorker**: Agente especializado para análise de dados.
 * **ThinkingWorker**: Agente especializado em raciocínio complexo e chain-of-thought.
 * **VideoWorker**: Agente preparado para geração de vídeos (Veo3).
+* **BrowserWorker**: 🆕 Agente especializado para navegação web e busca.
 * **Funções de Ferramentas**:
     * `save_file()`: Salva conteúdo em arquivos.
     * `generate_image()`: Gera imagens usando Gemini 2.0 Flash.
     * `generate_video()`: Planeja geração de vídeos (Veo3 quando disponível).
+    * `google_search()`: 🆕 Realiza buscas no Google com resultados estruturados.
+    * `fetch_webpage_content()`: 🆕 Extrai conteúdo limpo de páginas web.
+    * `browser_automation()`: 🆕 Automação básica de navegação e extração de links.
 
 ## Como Funciona (Fluxo de Trabalho)
 
@@ -62,13 +72,14 @@ O sistema é construído sobre um padrão Gerenciador/Router/Trabalhadores Espec
 4.  **Loop de Execução com Roteamento Inteligente**:
     * O TaskManager itera pela lista de tarefas.
     * Para cada tarefa, o **RouterAgent** analisa o conteúdo e seleciona automaticamente o agente especializado mais adequado.
-    * O agente selecionado (Worker, ImageWorker, AnalysisWorker, ThinkingWorker, ou VideoWorker) executa a tarefa.
+    * O agente selecionado (Worker, ImageWorker, AnalysisWorker, ThinkingWorker, VideoWorker, ou BrowserWorker) executa a tarefa.
     * Resultados são coletados e contextualizados para as próximas tarefas.
 5.  **Processamento Especializado**:
     * **ImageWorker** gera imagens usando Gemini 2.0 Flash.
     * **ThinkingWorker** aplica raciocínio estruturado e chain-of-thought.
     * **AnalysisWorker** processa dados analíticos.
     * **VideoWorker** planeja geração de vídeos para implementação futura com Veo3.
+    * **BrowserWorker** 🆕 executa buscas no Google, navega em sites e extrai conteúdo web.
 
 ## Configuração/Pré-requisitos
 
@@ -76,7 +87,7 @@ O sistema é construído sobre um padrão Gerenciador/Router/Trabalhadores Espec
 * Chave da API Google Gemini 2.5 Preview
 * Pacotes Python necessários:
     ```bash
-    pip install google-generativeai pillow
+    pip install google-generativeai pillow googlesearch-python beautifulsoup4 requests
     ```
 
 ## Variáveis de Ambiente
@@ -101,11 +112,13 @@ Vários parâmetros podem ser configurados no início do script `mag.py`:
 * **Retentativas**: `MAX_API_RETRIES`.
 * **Modelos**: `GEMINI_TEXT_MODEL_NAME` (Gemini 2.5 Preview), `GEMINI_IMAGE_MODEL_NAME` (Gemini 2.0 Flash).
 
-## Novidades da Versão 12.0 (Gemini 2.5 Preview)
+## Novidades da Versão 12.0 (Gemini 2.5 Preview + Web Tools)
 
 * **Compatibilidade com Gemini 2.5 Preview**: Atualização completa da API.
 * **RouterAgent**: Sistema inteligente de roteamento automático de tarefas.
-* **Agentes Especializados**: ImageWorker, AnalysisWorker, ThinkingWorker, VideoWorker.
+* **Agentes Especializados**: ImageWorker, AnalysisWorker, ThinkingWorker, VideoWorker, BrowserWorker.
+* **Ferramentas Web**: 🆕 Google Search, navegação web e automação de browser.
+* **BrowserWorker**: 🆕 Agente especializado para tarefas relacionadas à web.
 * **Capacidades de Pensamento Aprimoradas**: Melhor suporte para chain-of-thought reasoning.
 * **Preparação para Veo3**: Framework pronto para geração de vídeos quando disponível.
 * **Ferramenta de Vídeo**: Planejamento e documentação para futura integração com Veo3.
