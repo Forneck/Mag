@@ -448,8 +448,7 @@ generate_video_tool = genai.types.FunctionDeclaration(
             },
             "duration_seconds": {
                 "type": "integer",
-                "description": "Duração do vídeo em segundos (padrão: 5)",
-                "default": 5
+                "description": "Duração do vídeo em segundos (padrão: 5)"
             }
         },
         "required": ["video_prompt_in_english"]
@@ -468,8 +467,7 @@ google_search_tool = genai.types.FunctionDeclaration(
             },
             "num_results": {
                 "type": "integer",
-                "description": "Número máximo de resultados a retornar (padrão: 5)",
-                "default": 5
+                "description": "Número máximo de resultados a retornar (padrão: 5)"
             }
         },
         "required": ["query"]
@@ -488,8 +486,7 @@ fetch_webpage_content_tool = genai.types.FunctionDeclaration(
             },
             "extract_text_only": {
                 "type": "boolean",
-                "description": "Se true, extrai apenas texto limpo. Se false, retorna HTML bruto (padrão: true)",
-                "default": True
+                "description": "Se true, extrai apenas texto limpo. Se false, retorna HTML bruto (padrão: true)"
             }
         },
         "required": ["url"]
@@ -521,8 +518,7 @@ browser_automation_tool = genai.types.FunctionDeclaration(
             },
             "wait_seconds": {
                 "type": "integer",
-                "description": "Segundos para aguardar (padrão: 3)",
-                "default": 3
+                "description": "Segundos para aguardar (padrão: 3)"
             }
         },
         "required": ["action", "url"]
