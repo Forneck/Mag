@@ -280,13 +280,4 @@ The application supports these file upload patterns:
 - Generated artifacts are saved locally in timestamped directories
 - API communications use Google's standard authentication
 
-**TIMING REMINDER: Be patient with all operations. The system is designed for reliability over speed.**onfirm error handling with invalid API key
-6. Validate cleanup of temporary directories
-
-## Security Notes
-- Never commit API keys to source control
-- Uploaded files are stored locally only during session
-- Generated artifacts are saved locally in timestamped directories
-- API communications use Google's standard authentication
-
 **TIMING REMINDER: Be patient with all operations. The system is designed for reliability over speed.**
